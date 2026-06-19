@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sites — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-sites" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Sites">
+  <div id="page-content">
+
+    <style>
+      .policy-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 14px;
+        background:var(--brand-tint); border:1px solid var(--brand); border-radius:var(--radius); margin-bottom:14px; }
+      .policy-bar .t { font-weight:600; }
+      .policy-bar .sw { margin-left:auto; display:inline-flex; align-items:center; gap:8px; }
+      .policy-bar small { color:var(--ink-soft); }
+      .area-card { border:1px solid var(--line-soft); border-radius:var(--radius); padding:12px 14px; margin-bottom:10px; }
+      .area-card .zh { font-weight:600; margin-bottom:8px; }
+      .chip-grid { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 12px; }
+      .chip-grid label { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line-soft);
+        border-radius:14px; padding:4px 10px; font-size:12px; cursor:pointer; }
+      .chip-grid label:hover { background:var(--brand-tint2); }
+      .chip-grid input { width:auto; }
+    </style>
+
+    <div id="view-list">
+      <div class="page-head"><h1>Sites</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="openSite()">Create</button>
+          <button class="btn" disabled>Export</button></div></div>
+
+      <div class="policy-bar">
+        <span class="t">Client–area segregation (system-wide)</span>
+        <small id="seg-desc"></small>
+        <label class="sw"><input type="checkbox" id="seg-toggle" style="width:auto"> <span id="seg-state"></span></label>
+      </div>
+      <div class="tabs"><a href="#" class="active" onclick="return false">All</a>
+        <a href="#" onclick="return false">Active</a><a href="#" onclick="return false">Archived</a></div>
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site code</span><input></label>
+          <label class="field"><span>Name</span><input></label>
+          <label class="field"><span>City</span><input></label>
+          <label class="field"><span>Type</span><select><option>Any</option><option>Distribution Centre</option><option>Cross-dock Hub</option></select></label>
+        </div></div>
+      <div class="spacer"></div>
+      <div class="table-toolbar"><button class="btn btn-sm btn-outline">Excel</button>
+        <button class="btn btn-sm btn-outline">Excel+</button><span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>Code</th><th><span class="funnel">▾</span>Name</th>
+          <th><span class="funnel">▾</span>City</th><th><span class="funnel">▾</span>Type</th>
+          <th><span class="funnel">▾</span>Location structure</th>
+          <th><span class="funnel">▾</span>Locations</th><th><span class="funnel">▾</span>Status</th>
+        </tr></thead><tbody id="rows"></tbody></table></div>
+    </div>
+
+    <div id="view-edit" style="display:none">
+      <div class="page-head"><h1 id="e-title">Edit site</h1>
+        <div class="acts"><button class="btn btn-primary">Save site</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Identity</legend>
+          <div class="field-row">
+            <label class="field"><span>Site code <span class="req">*</span></span><input id="e-code" value="S-LYON"></label>
+            <label class="field"><span>Type</span><select><option>Distribution Centre</option><option>Cross-dock Hub</option></select></label>
+            <label class="field"><span>Status</span><select><option>Active</option><option>Archived</option></select></label>
+          </div>
+          <label class="field"><span>Name <span class="req">*</span></span><input id="e-name" value="Lyon DC"></label>
+        </fieldset>
+        <fieldset><legend>Address</legend>
+          <div class="field-row">
+            <label class="field"><span>City</span><input value="Lyon"></label>
+            <label class="field"><span>Country</span><input value="France"></label>
+          </div>
+          <label class="field"><span>Street address</span><textarea rows="2">Zone Industrielle Sud, 69800 Saint-Priest</textarea></label>
+        </fieldset>
+
+        <fieldset><legend>Location structure (this site)</legend>
+          <p class="wf-note muted" style="margin-top:0">
+            Define the addressing levels for this site, top → down. New sites start from the default
+            (<span class="mono">Zone › Aisle › Rack › Bin</span>). Locations created here will show exactly these fields —
+            no more, no less. The barcode is a separate permanent ID; these levels build the readable code.</p>
+          <table class="wf" style="max-width:620px"><thead><tr>
+            <th style="width:40px">#</th><th>Level name</th><th>Example</th><th style="width:140px">Order</th><th style="width:70px"></th>
+          </tr></thead><tbody id="lvl-rows"></tbody></table>
+          <div class="spacer"></div>
+          <div class="btn-row">
+            <button class="btn btn-sm btn-outline" onclick="addLevel()">Add level</button>
+            <button class="btn btn-sm" onclick="resetDefault()">Reset to default</button>
+          </div>
+          <div class="spacer"></div>
+          <div class="panel" style="background:var(--fill);max-width:620px">
+            <div class="muted" style="font-size:12px">Structure preview</div>
+            <div class="mono" id="lvl-preview" style="margin-top:4px"></div>
+            <div class="muted" style="font-size:12px;margin-top:8px">Example location code</div>
+            <div class="mono" id="lvl-example" style="margin-top:4px"></div>
+          </div>
+        </fieldset>
+
+        <fieldset><legend>Storage areas (slotting &amp; segregation)</legend>
+          <p class="wf-note muted" style="margin-top:0">Managed logical areas for this site, <b>independent of the addressing path</b> above — rename or restructure the path freely without affecting them. Assign each storage location to an area on the Locations screen. <b>Preferred categories / sub-categories</b> drive directed-putaway affinity; <b>owning client</b> dedicates the area (enforced only when system-wide segregation is ON). Bin <b>capacity</b> is set per location.</p>
+          <div id="area-rows"></div>
+          <div class="btn-row" style="margin-top:8px"><button class="btn btn-sm btn-outline" id="add-area-btn" onclick="addArea()">+ Add area</button></div>
+        </fieldset>
+
+        <div id="e-notes" style="margin:10px 0"></div>
+      </div>
+    </div>
+  </div>
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    // ----- list -----
+    function renderList(){
+      document.getElementById('rows').innerHTML = DB.sites.map(s=>{
+        const locs=DB.locations.filter(l=>l.site===s.id).length;
+        return `<tr><td><input type="checkbox" style="width:auto"></td><td class="dots">⋮</td>
+          <td class="mono">${s.id}</td><td><a href="#" onclick="openSite('${s.id}');return false">${s.name}</a></td>
+          <td>${s.city}</td><td>${s.type}</td>
+          <td class="muted">${s.levels.join(' › ')}</td>
+          <td>${locs}</td>
+          <td><span class="badge ${s.status==='active'?'b-available':''}">${s.status}</span></td></tr>`;
+      }).join('');
+    }
+    renderList();
+
+    // ----- structure editor (live) -----
+    const SAMPLE = { Floor:'1', Zone:'A', Aisle:'01', Rack:'R1', Bin:'B01', Shelf:'S2', Level:'L3' };
+    let levels = [];
+    function renderLevels(){
+      document.getElementById('lvl-rows').innerHTML = levels.map((name,i)=>`
+        <tr>
+          <td>${i+1}</td>
+          <td><input value="${name}" onchange="rename(${i}, this.value)" style="max-width:220px"></td>
+          <td class="muted mono">${SAMPLE[name]||'…'}</td>
+          <td>
+            <span class="btn btn-sm" onclick="move(${i},-1)" ${i===0?'class="btn btn-sm is-disabled"':''}>↑</span>
+            <span class="btn btn-sm" onclick="move(${i},1)" ${i===levels.length-1?'class="btn btn-sm is-disabled"':''}>↓</span>
+          </td>
+          <td><a href="#" onclick="removeLevel(${i});return false">Remove</a></td>
+        </tr>`).join('');
+      document.getElementById('lvl-preview').textContent = levels.join('  ›  ') || '(no levels)';
+      document.getElementById('lvl-example').textContent =
+        levels.map(n=>SAMPLE[n]||'?').join('-') || '—';
+    }
+    function rename(i,v){ levels[i]=v.trim()||levels[i]; renderLevels(); }
+    function move(i,d){ const j=i+d; if(j<0||j>=levels.length) return; [levels[i],levels[j]]=[levels[j],levels[i]]; renderLevels(); }
+    function removeLevel(i){ levels.splice(i,1); renderLevels(); }
+    function addLevel(){ levels.push('New level'); renderLevels(); }
+    function resetDefault(){ levels=[...DB.defaultLocationLevels]; renderLevels(); }
+
+    function openSite(id){
+      const s = id ? DB.sites.find(x=>x.id===id) : null;
+      document.getElementById('e-title').textContent = s ? 'Edit site' : 'Create site';
+      document.getElementById('e-code').value = s ? s.id : '';
+      document.getElementById('e-name').value = s ? s.name : '';
+      levels = s ? [...s.levels] : [...DB.defaultLocationLevels];
+      renderLevels();
+      renderAreas(s ? s.id : null);
+      document.getElementById('e-notes').innerHTML = noteField({ ref: s ? s.id : 'S-DRAFT', level:'header', title:'Notes (optional)' });
+      show('edit');
+    }
+
+    // ----- managed areas (slotting + segregation) -----
+    let curSiteId = null;
+    function allSubs(){ return DB.categories.flatMap(c=>c.subs.map(s=>({...s, cat:c.name}))); }
+    function curAreas(){ const s=DB.sites.find(x=>x.id===curSiteId); if(s && !s.areas) s.areas=[]; return s ? s.areas : []; }
+    function renderAreas(site){
+      curSiteId = site;
+      const wrap = document.getElementById('area-rows');
+      const addBtn = document.getElementById('add-area-btn');
+      if(!site){ wrap.innerHTML = '<p class="muted">Save the site first, then add areas.</p>'; if(addBtn) addBtn.style.display='none'; return; }
+      if(addBtn) addBtn.style.display='';
+      const areas = curAreas();
+      const binCount = code => DB.locations.filter(l=>l.site===site && l.type==='storage' && l.area===code).length;
+      wrap.innerHTML = areas.length ? areas.map((z,i)=>`
+        <div class="area-card">
+          <div class="zh" style="display:flex;align-items:center;gap:10px">
+            <input value="${z.name}" onchange="renameArea(${i}, this.value)" style="max-width:280px">
+            <span class="muted mono" style="font-size:11px">code ${z.code}</span>
+            <span class="muted" style="font-size:11px">· ${binCount(z.code)} bin(s)</span>
+            <a href="#" style="margin-left:auto;color:var(--bad)" onclick="removeArea(${i});return false">Remove</a>
+          </div>
+          <label class="field" style="max-width:320px"><span>Owning client (segregation)</span>
+            <select onchange="setOwner(${i}, this.value)"><option value="">Shared — any client</option>${DB.clients.map(c=>`<option value="${c.id}" ${c.id===(z.owningClient||'')?'selected':''}>${c.name}</option>`).join('')}</select></label>
+          <div class="muted" style="font-size:12px;margin-top:8px">Preferred categories</div>
+          <div class="chip-grid">${DB.categories.map(c=>`<label><input type="checkbox" ${ (z.preferredCategories||[]).includes(c.id)?'checked':''} onchange="toggleCat(${i},'${c.id}',this.checked)"> ${c.name}</label>`).join('')}</div>
+          <div class="muted" style="font-size:12px">Preferred sub-categories (optional)</div>
+          <div class="chip-grid">${allSubs().map(su=>`<label><input type="checkbox" ${ (z.preferredSubCategories||[]).includes(su.id)?'checked':''} onchange="toggleSub(${i},'${su.id}',this.checked)"> ${su.name} <span class="muted">· ${su.cat}</span></label>`).join('')}</div>
+        </div>`).join('') : '<p class="muted">No areas yet — use “Add area”.</p>';
+    }
+    function addArea(){
+      const zs=curAreas(); const used=new Set(zs.map(z=>z.code));
+      let code='Z'; for(let i=0;i<26;i++){ const c=String.fromCharCode(65+i); if(!used.has(c)){ code=c; break; } }
+      zs.push({ code, name:'Area '+code, preferredCategories:[], preferredSubCategories:[], owningClient:'' });
+      renderAreas(curSiteId);
+    }
+    function removeArea(i){
+      const z=curAreas()[i];
+      const n=DB.locations.filter(l=>l.site===curSiteId && l.area===z.code).length;
+      if(n>0){ alert(`Area ${z.code} still has ${n} location(s) assigned — reassign them first.`); return; }
+      curAreas().splice(i,1); renderAreas(curSiteId);
+    }
+    function renameArea(i,v){ const z=curAreas()[i]; z.name=v.trim()||z.name; }
+    function setOwner(i,v){ curAreas()[i].owningClient=v; }
+    function toggleCat(i,id,on){ const z=curAreas()[i]; z.preferredCategories=z.preferredCategories||[]; if(on){ if(!z.preferredCategories.includes(id)) z.preferredCategories.push(id);} else { z.preferredCategories=z.preferredCategories.filter(x=>x!==id);} }
+    function toggleSub(i,id,on){ const z=curAreas()[i]; z.preferredSubCategories=z.preferredSubCategories||[]; if(on){ if(!z.preferredSubCategories.includes(id)) z.preferredSubCategories.push(id);} else { z.preferredSubCategories=z.preferredSubCategories.filter(x=>x!==id);} }
+
+    // ----- system-wide segregation toggle -----
+    function paintSeg(){
+      const on = !!(DB.settings && DB.settings.clientAreaSegregation);
+      document.getElementById('seg-toggle').checked = on;
+      document.getElementById('seg-state').textContent = on ? 'ON' : 'OFF';
+      document.getElementById('seg-desc').textContent = on
+        ? 'Putaway offers a client only its own areas plus shared (unowned) areas; others are blocked.'
+        : 'Off — area ownership is informational; clients share areas. Applies across all sites.';
+    }
+    document.getElementById('seg-toggle').addEventListener('change', e => {
+      if (!DB.settings) DB.settings = {}; DB.settings.clientAreaSegregation = e.target.checked; paintSeg();
+    });
+    paintSeg();
+    function show(v){document.getElementById('view-list').style.display=v==='list'?'':'none';
+      document.getElementById('view-edit').style.display=v==='edit'?'':'none';window.scrollTo(0,0);}
+    function toggleFilter(b){const f=document.getElementById('filters');const h=f.style.display==='none';
+      f.style.display=h?'':'none';b.textContent=h?'Hide filter':'Show filter';}
+  </script>
+</body></html>

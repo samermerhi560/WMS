@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Locations — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-locations" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Locations">
+  <div id="page-content">
+
+    <style>
+      .bulk-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 14px;
+        border:1px solid var(--brand); border-radius:var(--radius); background:var(--brand-tint); margin-bottom:10px; }
+      .bulk-bar .cnt b { font-size:15px; }
+      .bulk-bar .inl { display:inline-flex; align-items:center; gap:8px; font-size:13px; }
+      .bulk-bar select { min-width:210px; }
+      .bulk-bar .hint { color:var(--ink-soft); font-size:12px; }
+      .grp-sel { font-weight:400; font-size:12px; margin-left:10px; }
+    </style>
+
+    <div id="view-list">
+      <div class="page-head"><h1>Locations</h1>
+        <div class="acts">
+          <button class="btn btn-outline" onclick="openLoc()">Create</button>
+          <a class="btn btn-outline" href="erp-md-import.html">Import CSV</a>
+          <button class="btn btn-outline" onclick="printSelectedLabels()">Print labels</button>
+          <button class="btn" disabled>Export</button>
+        </div></div>
+      <div class="tabs"><a href="#" class="active" onclick="return false">All</a>
+        <a href="#" onclick="return false">Storage</a><a href="#" onclick="return false">Wait/Put</a>
+        <a href="#" onclick="return false">Dispatch</a><a href="#" onclick="return false">Quarantine</a></div>
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site</span><select><option>All sites</option><option>Lyon DC</option><option>Paris Hub</option></select></label>
+          <label class="field"><span>Code / ID</span><input></label>
+          <label class="field"><span>User reference</span><input></label>
+          <label class="field"><span>Type</span><select><option>Any</option><option>Storage</option><option>Wait/Put</option><option>Dispatch</option><option>Quarantine</option></select></label>
+          <label class="field"><span>Status</span><select><option>Any</option><option>Active</option><option>Inactive</option></select></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Site <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+
+      <div id="bulk-banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:10px"></div>
+      <div id="bulk-bar" class="bulk-bar" style="display:none">
+        <span class="cnt"><b id="bulk-count">0</b> selected</span>
+        <label class="inl">Set storage area:&nbsp;<select id="bulk-area"></select></label>
+        <button class="btn btn-sm btn-primary" id="bulk-apply" onclick="applyBulkArea()">Apply to selected</button>
+        <span class="hint" id="bulk-hint"></span>
+        <button class="btn btn-sm btn-outline" style="margin-left:auto" onclick="clearSel()">Clear selection</button>
+      </div>
+
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" id="chk-all" onchange="toggleAll(this)" style="width:auto"></th><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>System ID</th>
+          <th><span class="funnel">▾</span>Structured code</th>
+          <th><span class="funnel">▾</span>User reference</th>
+          <th><span class="funnel">▾</span>Type</th>
+          <th><span class="funnel">▾</span>Area</th>
+          <th><span class="funnel">▾</span>Capacity</th>
+          <th><span class="funnel">▾</span>Status</th>
+        </tr></thead><tbody id="rows"></tbody></table></div>
+      <p class="wf-note muted">Grouped by site. Columns are uniform here; the per-site level breakdown (which differs by site) appears on the location’s edit screen.</p>
+    </div>
+
+    <div id="view-edit" style="display:none">
+      <div class="page-head"><h1 id="e-title">Edit location</h1>
+        <div class="acts"><button class="btn btn-primary">Save location</button>
+          <button class="btn btn-outline" onclick="printCurrentLabel()">Print label</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+
+      <div class="row">
+        <div class="panel col" style="min-width:340px">
+          <fieldset><legend>Identity</legend>
+            <div class="field-row">
+              <label class="field"><span>System ID (auto, permanent)</span><input id="e-id" value="LOC-000123" readonly></label>
+              <label class="field"><span>Functional type <span class="req">*</span></span>
+                <select><option>Storage</option><option>Wait/Put (staging)</option><option>Dispatch</option><option>Quarantine</option></select></label>
+            </div>
+            <label class="field"><span>User reference (optional)</span><input id="e-ref" placeholder="e.g. Cold room 2 / legacy code"></label>
+            <label class="field"><span>Storage area (slotting / segregation)</span><select id="e-area"></select></label>
+          </fieldset>
+
+          <fieldset><legend>Location path</legend>
+            <label class="field"><span>Site <span class="req">*</span></span>
+              <select id="e-site" onchange="onSite()"></select></label>
+            <p class="wf-note muted" id="e-struct-note" style="margin:-4px 0 8px"></p>
+            <div id="e-levels"></div>
+          </fieldset>
+
+          <fieldset><legend>Capacity (optional — storage bins)</legend>
+            <p class="wf-note muted" style="margin-top:0">Physical limits enforced at <b>putaway</b>: an LPN is offered only if it still fits after adding it. Leave blank for unlimited.</p>
+            <div class="field-row">
+              <label class="field"><span>Max weight (kg)</span><input id="e-maxw" type="number" min="0" placeholder="—"></label>
+              <label class="field"><span>Max units (base)</span><input id="e-maxu" type="number" min="0" placeholder="—"></label>
+              <label class="field"><span>Max pallets / LPN slots</span><input id="e-maxl" type="number" min="0" placeholder="—"></label>
+            </div>
+          </fieldset>
+
+          <div id="e-notes" style="margin:10px 0"></div>
+        </div>
+
+        <div class="panel col" style="min-width:260px;max-width:320px">
+          <h3 style="margin-top:0">Label preview</h3>
+          <div style="border:1px solid var(--line);border-radius:var(--radius);padding:14px;text-align:center">
+            <div id="p-bc" style="margin-bottom:8px"></div>
+            <div class="mono" id="p-id" style="font-weight:700">LOC-000123</div>
+            <div class="mono" id="p-struct" style="font-size:13px">1-A-01-R1-B01</div>
+            <div class="muted" id="p-ref" style="font-size:12px"></div>
+          </div>
+          <p class="wf-note muted">The scannable barcode encodes the <b>System ID</b> (permanent, Code 128). The <b>structured code</b> and user reference print for humans. Relabelling or restructuring never changes the ID.</p>
+          <div class="btn-row"><button class="btn btn-sm" onclick="regen()">Regenerate structured code</button>
+            <button class="btn btn-sm btn-outline" onclick="printCurrentLabel()">Print label</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/barcode.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    // ---- list: uniform columns, grouped by site (structure shown in group header) ----
+    function renderList(){
+      let html='';
+      const capStr = l => {
+        if(l.type!=='storage') return '<span class="muted">—</span>';
+        const p=[];
+        if(l.maxUnits!=null)    p.push(l.maxUnits+'u');
+        if(l.maxWeightKg!=null) p.push(l.maxWeightKg+'kg');
+        if(l.maxLpns!=null)     p.push(l.maxLpns+' sl');
+        return p.length ? p.join(' · ') : '<span class="muted">—</span>';
+      };
+      DB.sites.forEach(s=>{
+        const locs=DB.locations.filter(l=>l.site===s.id);
+        if(!locs.length) return;
+        html+=`<tr class="group"><td colspan="9">${s.name} &nbsp; <span class="muted" style="font-weight:400">structure: ${s.levels.join(' › ')}</span> <a href="#" class="grp-sel" onclick="selectSite('${s.id}');return false">select all in site</a></td></tr>`;
+        locs.forEach(l=>{
+          html+=`<tr><td><input type="checkbox" class="rowchk" data-id="${l.id}" data-site="${l.site}" data-type="${l.type}" style="width:auto" onchange="onSelChange()"></td><td class="dots">⋮</td>
+            <td class="mono"><a href="#" onclick="openLoc('${l.id}');return false">${l.id}</a></td>
+            <td class="mono">${l.structured}</td>
+            <td class="muted">${l.userRef||'—'}</td>
+            <td>${l.type}</td>
+            <td class="mono">${l.area||'<span class="muted">—</span>'}</td>
+            <td class="muted" style="font-size:12px">${capStr(l)}</td>
+            <td><span class="badge ${l.status==='active'?'b-available':''}">${l.status}</span></td></tr>`;
+        });
+      });
+      document.getElementById('rows').innerHTML=html;
+      const all=document.getElementById('chk-all'); if(all) all.checked=false;
+      onSelChange();
+    }
+
+    // ---- bulk area assignment (areas are per-site → selection must be one site) ----
+    function allChecks(){ return [...document.querySelectorAll('.rowchk')]; }
+    function selectedChecks(){ return allChecks().filter(c=>c.checked); }
+    function toggleAll(cb){ allChecks().forEach(c=>c.checked=cb.checked); onSelChange(); }
+    function selectSite(siteId){ allChecks().forEach(c=>{ if(c.dataset.site===siteId) c.checked=true; }); onSelChange(); }
+    function clearSel(){ allChecks().forEach(c=>c.checked=false); const a=document.getElementById('chk-all'); if(a)a.checked=false; onSelChange(); }
+    function onSelChange(){
+      const sel=selectedChecks(); const bar=document.getElementById('bulk-bar');
+      if(!sel.length){ bar.style.display='none'; return; }
+      bar.style.display='flex';
+      document.getElementById('bulk-count').textContent=sel.length;
+      const sites=[...new Set(sel.map(c=>c.dataset.site))];
+      const areaSel=document.getElementById('bulk-area'), applyBtn=document.getElementById('bulk-apply'), hint=document.getElementById('bulk-hint');
+      if(sites.length===1){
+        const sid=sites[0]; areaSel.disabled=false; applyBtn.disabled=false;
+        areaSel.innerHTML = `<option value="">— none — (clear area)</option>` + siteAreas(sid).map(z=>`<option value="${z.code}">${esc(z.name)}</option>`).join('');
+        const stg=sel.filter(c=>c.dataset.type==='storage').length;
+        hint.textContent = `${dbName('sites',sid)} · ${stg} storage of ${sel.length} selected will be updated (non-storage skipped)`;
+      } else {
+        areaSel.disabled=true; applyBtn.disabled=true; areaSel.innerHTML='<option>—</option>';
+        hint.textContent='Storage areas are per-site — select locations from a single site to assign.';
+      }
+    }
+    function applyBulkArea(){
+      const sel=selectedChecks(); if(!sel.length) return;
+      const sites=[...new Set(sel.map(c=>c.dataset.site))]; if(sites.length!==1) return;
+      const code=document.getElementById('bulk-area').value;   // '' = clear
+      let updated=0, skipped=0;
+      sel.forEach(c=>{ const l=DB.locations.find(x=>x.id===c.dataset.id); if(!l) return;
+        if(l.type!=='storage'){ skipped++; return; }
+        if(code) l.area=code; else delete l.area; updated++; });
+      const areaName = code ? ((siteAreas(sites[0]).find(z=>z.code===code)||{}).name||code) : '— none —';
+      const b=document.getElementById('bulk-banner');
+      b.innerHTML = `Assigned <b>${esc(areaName)}</b> to <b>${updated}</b> storage location(s)${skipped?` · ${skipped} non-storage skipped`:''}. <span class="muted">Mock — session only.</span>`;
+      b.style.display='block';
+      renderList();
+    }
+
+    // ---- dynamic edit form ----
+    const SAMPLE={Floor:'1',Zone:'A',Aisle:'01',Rack:'R1',Bin:'B01',Shelf:'S2',Level:'L3'};
+    let cur=null;
+    function siteOptions(sel){
+      return DB.sites.map(s=>`<option value="${s.id}" ${s.id===sel?'selected':''}>${s.name}</option>`).join('');
+    }
+    function renderLevels(siteId, path){
+      const s=DB.sites.find(x=>x.id===siteId);
+      document.getElementById('e-struct-note').innerHTML =
+        `This site’s structure: <span class="mono">${s.levels.join(' › ')}</span>. Fields below follow it.`;
+      document.getElementById('e-levels').innerHTML = `<div class="field-row">` + s.levels.map(name=>{
+        const v=(path&&path[name])||'';
+        return `<label class="field"><span>${name}</span><input data-lvl="${name}" value="${v}" oninput="regen()" placeholder="${SAMPLE[name]||''}"></label>`;
+      }).join('') + `</div>`;
+      regen();
+    }
+    function regen(){
+      const vals=[...document.querySelectorAll('#e-levels input')].map(i=>i.value.trim()).filter(Boolean);
+      const code = vals.join('-') || '—';
+      document.getElementById('p-struct').textContent = code;
+      const ref=document.getElementById('e-ref').value.trim();
+      document.getElementById('p-ref').textContent = ref?('ref: '+ref):'';
+      document.getElementById('p-id').textContent = document.getElementById('e-id').value;
+      // live, scannable barcode of the System ID (Code 128)
+      const idv = cleanId(document.getElementById('e-id').value);
+      const bc = document.getElementById('p-bc');
+      if (bc && window.barcodeSVG) bc.innerHTML = barcodeSVG(idv, { height:46, module:1.7 });
+    }
+    const cleanId = v => String(v||'').replace(/\s*\(auto\)/,'').trim() || 'LOC-NEW';
+
+    /* ---- label printing (Code 128 of the System ID + human-readable lines) ---- */
+    function locLabelHTML(l){
+      return labelHTML({ title:'LOCATION', code:l.id, lines:[
+        { k:'Site', v:dbName('sites',l.site) },
+        { k:'Code', v:l.structured||'—' },
+        ...(l.area ? [{ k:'Area', v:l.area }] : []),
+        ...(l.userRef ? [{ k:'Ref', v:l.userRef }] : []),
+        { k:'Type', v:l.type },
+      ]});
+    }
+    function printCurrentLabel(){
+      const id = cleanId(document.getElementById('e-id').value);
+      const site = document.getElementById('e-site').value;
+      const area = document.getElementById('e-area').value;
+      const ref  = document.getElementById('e-ref').value.trim();
+      printLabels([ labelHTML({ title:'LOCATION', code:id, lines:[
+        { k:'Site', v:dbName('sites',site) },
+        { k:'Code', v:document.getElementById('p-struct').textContent },
+        ...(area ? [{ k:'Area', v:area }] : []),
+        ...(ref ? [{ k:'Ref', v:ref }] : []),
+      ]}) ], 'Location label · '+id);
+    }
+    function printSelectedLabels(){
+      let ids = selectedChecks().map(c=>c.dataset.id);
+      if (!ids.length) ids = allChecks().map(c=>c.dataset.id);   // none selected → print everything in view
+      if (!ids.length){ alert('No locations to print.'); return; }
+      const html = ids.map(id=>{ const l=DB.locations.find(x=>x.id===id); return l?locLabelHTML(l):''; }).filter(Boolean);
+      printLabels(html, ids.length+' location label(s)');
+    }
+    function onSite(){ const sid=document.getElementById('e-site').value; renderLevels(sid, {}); fillAreas(sid, ''); }
+    function fillAreas(siteId, sel){
+      document.getElementById('e-area').innerHTML = `<option value="">— none —</option>` +
+        siteAreas(siteId).map(z=>`<option value="${z.code}" ${z.code===sel?'selected':''}>${z.name}</option>`).join('');
+    }
+
+    function openLoc(id){
+      cur = id ? DB.locations.find(l=>l.id===id) : null;
+      document.getElementById('e-title').textContent = cur ? 'Edit location' : 'Create location';
+      document.getElementById('e-id').value = cur ? cur.id : 'LOC-000124 (auto)';
+      document.getElementById('e-ref').value = cur ? (cur.userRef||'') : '';
+      document.getElementById('e-maxw').value = (cur && cur.maxWeightKg!=null) ? cur.maxWeightKg : '';
+      document.getElementById('e-maxu').value = (cur && cur.maxUnits!=null)    ? cur.maxUnits    : '';
+      document.getElementById('e-maxl').value = (cur && cur.maxLpns!=null)     ? cur.maxLpns     : '';
+      const siteId = cur ? cur.site : DB.sites[0].id;
+      document.getElementById('e-site').innerHTML = siteOptions(siteId);
+      fillAreas(siteId, cur ? (cur.area||'') : '');
+      renderLevels(siteId, cur ? cur.path : {});
+      document.getElementById('e-notes').innerHTML = noteField({ ref: cur ? cur.id : 'LOC-DRAFT', level:'header', title:'Notes (optional)' });
+      show('edit');
+    }
+    function show(v){document.getElementById('view-list').style.display=v==='list'?'':'none';
+      document.getElementById('view-edit').style.display=v==='edit'?'':'none';window.scrollTo(0,0);}
+    function toggleFilter(b){const f=document.getElementById('filters');const h=f.style.display==='none';
+      f.style.display=h?'':'none';b.textContent=h?'Hide filter':'Show filter';}
+
+    renderList();
+  </script>
+</body></html>

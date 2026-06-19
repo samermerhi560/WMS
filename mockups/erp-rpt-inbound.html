@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inbound / Receipts — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-inbound" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Inbound / Receipts">
+  <div id="page-content">
+    <style>
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-over  { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tag.tag-short { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-ok    { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .print-only.phead { margin-bottom:10px; }
+    </style>
+
+    <div class="print-only phead"><h1>Inbound / Receipts</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Inbound / Receipts</h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">Received vs ASN-expected by client — receipt completeness, over- and short-receipts. Reads inbound
+      ASNs (<code>asnTotals</code> / <code>asnStatus</code>) and receive transactions.</p>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Filters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>Client</span><select id="f-client"></select></label>
+        <label class="field"><span>Site</span><select id="f-site"></select></label>
+        <label class="field"><span>ASN status</span><select id="f-status">
+          <option value="all">All</option>
+          <option value="open">Open</option>
+          <option value="partial">Partial</option>
+          <option value="closed">Closed</option>
+        </select></label>
+        <label class="field"><span>ASN / product</span><input id="f-q" placeholder="Search…"></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="table-toolbar no-print">
+      <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+      <button class="btn btn-sm btn-outline" onclick="window.print()">Print</button>
+      <span class="chip">↑ Client <span class="x">✕</span></span>
+      <span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th><span class="funnel">▾</span>ASN</th>
+        <th><span class="funnel">▾</span>Site</th>
+        <th><span class="funnel">▾</span>Status</th>
+        <th class="num">Lines</th>
+        <th class="num">Expected</th>
+        <th class="num">Received</th>
+        <th class="num">Outstanding</th>
+        <th class="num">Fill %</th>
+        <th>Variance</th>
+        <th>Notes</th>
+      </tr></thead><tbody id="rows"></tbody></table>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const state = { client:'all', site:'all', status:'all', q:'' };
+
+    function rowsData(){
+      return (DB.asns||[]).filter(a=>{
+        if (state.client!=='all' && a.client!==state.client) return false;
+        if (state.site!=='all'   && a.site!==state.site)     return false;
+        if (state.status!=='all' && asnStatus(a)!==state.status) return false;
+        if (state.q){
+          const hay = `${a.id} ${a.lines.map(l=>prodName(l.product)).join(' ')}`.toLowerCase();
+          if (!hay.includes(state.q)) return false;
+        }
+        return true;
+      });
+    }
+    function varianceCell(a){
+      const over = a.lines.some(l=>(l.received||0) > l.qty);
+      const short = asnStatus(a)==='closed' ? false : a.lines.some(l=>(l.received||0) < l.qty && (l.received||0)>0);
+      if (over)  return `<span class="tag tag-over">over-receipt</span>`;
+      if (asnStatus(a)==='closed') return `<span class="tag tag-ok">complete</span>`;
+      if (short || asnStatus(a)==='partial') return `<span class="tag tag-short">part-received</span>`;
+      return `<span class="muted">awaiting</span>`;
+    }
+
+    function render(){
+      const list = rowsData();
+      const byClient = {};
+      list.forEach(a => { (byClient[a.client] = byClient[a.client] || []).push(a); });
+
+      let html = '';
+      let tExp=0, tRec=0, openN=0, partN=0, closN=0;
+      Object.keys(byClient).sort((a,b)=>dbName('clients',a).localeCompare(dbName('clients',b))).forEach(cid=>{
+        const asns = byClient[cid];
+        const cExp = asns.reduce((s,a)=>s+asnTotals(a).exp,0);
+        const cRec = asns.reduce((s,a)=>s+asnTotals(a).rec,0);
+        html += `<tr class="group"><td colspan="10">▦ ${esc(dbName('clients',cid))}
+          <span class="gsum">${asns.length} ASN(s) · ${cRec}/${cExp} units received</span></td></tr>`;
+        asns.forEach(a=>{
+          const t = asnTotals(a), st = asnStatus(a);
+          const out = Math.max(0, t.exp - t.rec);
+          const fill = t.exp ? Math.round(t.rec/t.exp*100) : 0;
+          tExp+=t.exp; tRec+=t.rec;
+          if (st==='open') openN++; else if (st==='partial') partN++; else closN++;
+          html += `<tr>
+            <td class="mono"><a href="erp-gr-asn.html?asn=${a.id}">${a.id}</a></td>
+            <td>${esc(dbName('sites',a.site))}</td>
+            <td>${statusBadge(st)}</td>
+            <td class="num">${t.linesComplete}/${t.lines}</td>
+            <td class="num">${t.exp}</td>
+            <td class="num">${t.rec}</td>
+            <td class="num">${out||'<span class="muted">0</span>'}</td>
+            <td class="num">${fill}%</td>
+            <td>${varianceCell(a)}</td>
+            <td>${noteFor(a.id) || '<span class="muted">—</span>'}</td>
+          </tr>`;
+        });
+      });
+      $('rows').innerHTML = html || `<tr><td colspan="10" class="muted" style="padding:18px">No ASNs match the filters.</td></tr>`;
+
+      const fill = tExp?Math.round(tRec/tExp*100):0;
+      $('kpis').innerHTML = `
+        <div class="kpi"><span class="k-label">ASNs</span><span class="k-val">${list.length}</span></div>
+        <div class="kpi"><span class="k-label">Units expected</span><span class="k-val">${tExp}</span></div>
+        <div class="kpi k-good"><span class="k-label">Units received</span><span class="k-val">${tRec}</span><span class="k-sub">${fill}% fill rate</span></div>
+        <div class="kpi"><span class="k-label">Open</span><span class="k-val">${openN}</span></div>
+        <div class="kpi k-warn"><span class="k-label">Partial</span><span class="k-val">${partN}</span></div>
+        <div class="kpi"><span class="k-label">Closed</span><span class="k-val">${closN}</span></div>`;
+      $('summary').textContent = `${list.length} ASN(s) · ${tRec}/${tExp} units received`;
+      $('p-filters').textContent = `Client: ${state.client==='all'?'All':dbName('clients',state.client)}  ·  Site: ${state.site==='all'?'All':dbName('sites',state.site)}  ·  Status: ${state.status}`;
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-site').innerHTML   = `<option value="all">All sites</option>` + DB.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; render(); });
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; render(); });
+    $('f-status').addEventListener('change', e=>{ state.status=e.target.value; render(); });
+    $('f-q').addEventListener('input',       e=>{ state.q=e.target.value.trim().toLowerCase(); render(); });
+    render();
+  </script>
+</body></html>

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reprint label — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Reprint label" data-pwa-back="pwa-home.html">
+  <div id="page-content">
+    <div id="rp-flash" class="sb-msg" style="display:none"></div>
+    <div id="rp"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('rp');
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const idSeq = id => { const m=/(\d+)/.exec(id||''); return m?+m[1]:0; };
+    const S = { view:'list', asnId:null };
+
+    function flash(t){ const m=$('rp-flash'); if(m){ m.textContent=t; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('rp-flash'); if(m) m.style.display='none'; }
+    // The label render + print already lives in pwa-gr-lpn.html (?lpn= / ?pallet=) — reprint just resolves + hands off.
+    function go(kind, id){ location.href = `pwa-gr-lpn.html?${kind}=${encodeURIComponent(id)}`; }
+
+    function recentLpns(){
+      return DB.lpns.filter(l => l.site===site() && l.client===client() && (l.qty||0)>0)
+        .sort((a,b)=>idSeq(b.id)-idSeq(a.id)).slice(0,12);
+    }
+    function recentPlts(){ return palletsAtSite(site(), client()).sort((a,b)=>idSeq(b.id)-idSeq(a.id)); }
+    function recentAsns(){ return DB.asns.filter(a => a.site===site() && a.client===client()).slice(-6).reverse(); }
+    function asnPlates(asnId){
+      const ids = new Set(DB.txns.filter(t => t.type==='receive' && t.ref===asnId && /^LPN-/i.test(t.lpn||'')).map(t=>t.lpn));
+      return { lpns:DB.lpns.filter(l=>ids.has(l.id)), plts:(DB.pallets||[]).filter(p=>p.asn===asnId) };
+    }
+
+    function onScan(code, r){
+      if (r && r.type==='lpn')         go('lpn', r.id);
+      else if (r && r.type==='pallet') go('pallet', r.id);
+      else flash('Scan an LPN (LPN-…) or a pallet (PLT-…) to reprint its label.');
+    }
+
+    /* ---------- list: scan + recent receipts + ASN chips ---------- */
+    function renderList(){
+      const lpns = recentLpns(), plts = recentPlts(), asns = recentAsns();
+      const lpnCards = lpns.length ? lpns.map(l => `<div class="task" data-lpn="${esc(l.id)}"><span class="meta"><b>${esc(l.id)}</b>
+          <small>${esc(prodName(l.product))} · ${l.qty} ${esc(prodUom(l.product))}</small></span><span class="badge b-toputaway">reprint</span></div>`).join('')
+        : `<p class="scan-hint" style="text-align:left">— none —</p>`;
+      const pltCards = plts.length ? plts.map(p => { const t=palletTotals(p); return `<div class="task" data-plt="${esc(p.id)}"><span class="meta"><b>${esc(p.id)}</b>
+          <small>mixed pallet · ${t.lines} products · ${t.units} units</small></span><span class="badge b-toputaway">reprint</span></div>`; }).join('')
+        : `<p class="scan-hint" style="text-align:left">— none —</p>`;
+      const asnChips = asns.length ? asns.map(a => `<div class="task" data-asn="${esc(a.id)}"><span class="meta"><b>${esc(a.id)}</b>
+          <small>${esc(dbName('suppliers',a.supplier))} · ${asnStatus(a)}</small></span><span class="badge">open ›</span></div>`).join('')
+        : `<p class="scan-hint" style="text-align:left">— none —</p>`;
+
+      root.innerHTML =
+        PWAScan.field({ id:'sf-rp', prompt:'Scan an LPN or pallet to reprint', autofocus:true, placeholder:'LPN-00112 · PLT-00001',
+          list:[].concat(lpns.map(l=>({value:l.id,label:l.id,sub:prodName(l.product)})), plts.map(p=>({value:p.id,label:p.id,sub:'mixed pallet'}))), onScan })
+        + `<p class="scan-hint" style="text-align:left">Out of paper or the device died? Re-print straight from the database — nothing is re-minted.</p>`
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Recent license plates (${lpns.length})</p>${lpnCards}`
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Recent mixed pallets (${plts.length})</p>${pltCards}`
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">By ASN — reprint everything received against one</p>${asnChips}`;
+      root.querySelectorAll('[data-lpn]').forEach(el=>el.onclick=()=>go('lpn', el.dataset.lpn));
+      root.querySelectorAll('[data-plt]').forEach(el=>el.onclick=()=>go('pallet', el.dataset.plt));
+      root.querySelectorAll('[data-asn]').forEach(el=>el.onclick=()=>{ S.view='asn'; S.asnId=el.dataset.asn; render(); });
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+
+    /* ---------- by-ASN: list plates recorded against an ASN ---------- */
+    function renderAsn(){
+      const a = DB.asns.find(x=>x.id===S.asnId); if(!a){ S.view='list'; return render(); }
+      const { lpns, plts } = asnPlates(S.asnId);
+      const lpnCards = lpns.map(l => `<div class="task" data-lpn="${esc(l.id)}"><span class="meta"><b>${esc(l.id)}</b>
+          <small>${esc(prodName(l.product))} · ${l.qty} ${esc(prodUom(l.product))}</small></span><span class="badge b-toputaway">reprint</span></div>`).join('');
+      const pltCards = plts.map(p => { const t=palletTotals(p); return `<div class="task" data-plt="${esc(p.id)}"><span class="meta"><b>${esc(p.id)}</b>
+          <small>mixed pallet · ${t.lines} products · ${t.units} units</small></span><span class="badge b-toputaway">reprint</span></div>`; }).join('');
+      const total = lpns.length + plts.length;
+      root.innerHTML =
+        `<div class="panel" style="margin-bottom:10px"><b>${esc(a.id)}</b> ${statusBadge(asnStatus(a))}<br>
+           <span class="muted">${esc(dbName('suppliers',a.supplier))} · ${total} handling unit(s) recorded this session</span></div>`
+        + (total ? `${lpnCards}${pltCards}`
+                 : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No plates recorded against ${esc(a.id)} yet. Receive against it, then reprint here.</p></div>`)
+        + `<div class="spacer"></div><button class="btn btn-outline" id="rp-back" style="width:100%">‹ Back</button>`;
+      root.querySelectorAll('[data-lpn]').forEach(el=>el.onclick=()=>go('lpn', el.dataset.lpn));
+      root.querySelectorAll('[data-plt]').forEach(el=>el.onclick=()=>go('pallet', el.dataset.plt));
+      $('rp-back').onclick = () => { S.view='list'; S.asnId=null; render(); };
+    }
+
+    function render(){ flashClear(); ({ list:renderList, asn:renderAsn }[S.view] || renderList)(); }
+    render();
+  })();
+  </script>
+</body>
+</html>

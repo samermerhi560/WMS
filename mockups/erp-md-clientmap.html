@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Client–User Mapping — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-clientmap" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Client–User Mapping">
+  <div id="page-content">
+    <style>
+      /* add/edit mapping modal (must live inside #page-content — the shell rebuilds body from it) */
+      .ovl { position:fixed; inset:0; background:rgba(20,28,42,.45); z-index:60; display:none; align-items:flex-start; justify-content:center; padding:54px 16px; }
+      .ovl.show { display:flex; }
+      .ovl .box { background:#fff; border-radius:var(--radius); width:min(560px,96vw); max-height:86vh; overflow:auto; box-shadow:0 18px 50px rgba(0,0,0,.3); }
+      .ovl .box-h { display:flex; align-items:center; gap:10px; padding:14px 18px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#fff; }
+      .ovl .box-h .x { margin-left:auto; cursor:pointer; font-size:20px; color:var(--ink-soft); line-height:1; }
+      .ovl .box-b { padding:16px 18px; }
+      .ovl .box-f { display:flex; gap:10px; justify-content:flex-end; padding:14px 18px; border-top:1px solid var(--line); position:sticky; bottom:0; background:#fff; }
+      .all-chk { display:flex; align-items:center; gap:8px; margin:16px 0 14px; padding:10px 12px;
+        border:1px dashed var(--line); border-radius:var(--radius); background:var(--fill); }
+      .cl-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; min-height:22px; }
+    </style>
+
+    <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+    <div class="page-head"><h1>Client–User Mapping</h1>
+      <div class="acts"><button class="btn btn-primary" onclick="openAdd()">Add User</button>
+        <button class="btn" disabled>Export</button></div></div>
+    <p class="sub">Attach an ERP user to the clients whose stock they may access. A user flagged
+      <strong>All Clients</strong> can see every client; otherwise they see only the clients listed here.</p>
+
+    <div class="panel">
+      <div class="filter-head"><span class="ttl">Filters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>User name</span><input></label>
+        <label class="field"><span>First name</span><input></label>
+        <label class="field"><span>Last name</span><input></label>
+        <label class="field"><span>Client scope</span><select><option>Any</option><option>All clients</option><option>Specific clients</option></select></label>
+      </div></div>
+    <div class="spacer"></div>
+    <div class="table-toolbar"><button class="btn btn-sm btn-outline">Excel</button>
+      <button class="btn btn-sm btn-outline">Excel+</button><span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+        <th><span class="funnel">▾</span>User name</th>
+        <th><span class="funnel">▾</span>First name</th>
+        <th><span class="funnel">▾</span>Last name</th>
+        <th><span class="funnel">▾</span>Clients related to</th>
+        <th><span class="funnel">▾</span>Status</th>
+      </tr></thead><tbody id="rows"></tbody></table></div>
+
+    <!-- ===================== Add / edit mapping modal ===================== -->
+    <div class="ovl" id="add-ovl" onclick="if(event.target===this)closeAdd()">
+      <div class="box">
+        <div class="box-h"><strong id="add-title">Add user mapping</strong><span class="x" onclick="closeAdd()">✕</span></div>
+        <div class="box-b">
+          <label class="field"><span>User <span class="req">*</span></span>
+            <select id="m-user"><option value="">Select user…</option></select></label>
+
+          <label class="all-chk">
+            <input type="checkbox" id="m-all" style="width:auto" onchange="toggleAll()">
+            <span><strong>All Clients</strong> <span class="muted">— grant access to every client</span></span></label>
+
+          <div id="m-clients-block">
+            <div class="field-row" style="align-items:flex-end">
+              <label class="field" style="flex:1"><span>Client to attach</span>
+                <select id="m-client"><option value="">Select client…</option></select></label>
+              <button class="btn btn-outline" type="button" onclick="addClient()">Add</button>
+            </div>
+            <div class="cl-chips" id="m-chips"></div>
+            <p class="wf-note muted" id="m-empty">No clients attached yet — add one, or tick All Clients.</p>
+          </div>
+        </div>
+        <div class="box-f">
+          <button class="btn btn-primary" onclick="saveMap()">Save mapping</button>
+          <button class="btn btn-outline" onclick="closeAdd()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="assets/data.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    let editId = null;      // id of the user being edited (null = adding)
+    let selClients = [];    // client ids chosen in the modal
+
+    /* ---- table ---- */
+    function cellClients(u){
+      if(u.allClients) return '<span class="badge b-available">All clients</span>';
+      const ids = u.clientIds||[];
+      if(!ids.length) return '<span class="muted">— none —</span>';
+      return ids.map(id=>`<span class="chip">${dbName('clients',id)}</span>`).join(' ');
+    }
+    function renderRows(){
+      $('rows').innerHTML = DB.users.map(u=>`
+        <tr>
+          <td><input type="checkbox" style="width:auto"></td>
+          <td class="dots" title="Edit mapping" onclick="openAdd('${u.id}')">⋮</td>
+          <td><a href="#" onclick="openAdd('${u.id}');return false">${u.username||u.id}</a></td>
+          <td>${u.firstName||''}</td>
+          <td>${u.lastName||''}</td>
+          <td>${cellClients(u)}</td>
+          <td><span class="badge ${u.status==='active'?'b-available':''}">${u.status}</span></td>
+        </tr>`).join('');
+    }
+
+    /* ---- modal ---- */
+    function fillSelects(){
+      $('m-user').innerHTML = '<option value="">Select user…</option>' +
+        DB.users.map(u=>`<option value="${u.id}">${u.name} (${u.username||u.id})</option>`).join('');
+      $('m-client').innerHTML = '<option value="">Select client…</option>' +
+        DB.clients.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+    }
+    function renderModalChips(){
+      $('m-chips').innerHTML = selClients.map(id=>
+        `<span class="chip">${dbName('clients',id)} <span class="x" title="Remove" onclick="removeClient('${id}')">✕</span></span>`).join('');
+      $('m-empty').style.display = selClients.length ? 'none' : '';
+    }
+    function toggleAll(){ $('m-clients-block').style.display = $('m-all').checked ? 'none' : ''; }
+    function addClient(){
+      const sel=$('m-client'), id=sel.value;
+      if(!id) return;
+      if(!selClients.includes(id)) selClients.push(id);
+      sel.value=''; if(sel._ssSync) sel._ssSync();
+      renderModalChips();
+    }
+    function removeClient(id){ selClients = selClients.filter(x=>x!==id); renderModalChips(); }
+
+    function openAdd(userId){
+      editId = userId || null;
+      const u = editId ? DB.users.find(x=>x.id===editId) : null;
+      $('add-title').textContent = u ? `Edit mapping — ${u.name}` : 'Add user mapping';
+      const us=$('m-user'); us.value = u ? u.id : ''; if(us._ssSync) us._ssSync();
+      $('m-all').checked = u ? !!u.allClients : false;
+      selClients = (u && !u.allClients) ? (u.clientIds||[]).slice() : [];
+      const cs=$('m-client'); cs.value=''; if(cs._ssSync) cs._ssSync();
+      toggleAll(); renderModalChips();
+      $('add-ovl').classList.add('show');
+    }
+    function closeAdd(){ $('add-ovl').classList.remove('show'); }
+
+    function saveMap(){
+      const uid = $('m-user').value;
+      if(!uid){ alert('Pick a user.'); return; }
+      const all = $('m-all').checked;
+      if(!all && selClients.length===0){ alert('Attach at least one client, or tick All Clients.'); return; }
+      const u = DB.users.find(x=>x.id===uid);
+      if(!u){ alert('User not found.'); return; }
+      u.allClients = all;
+      u.clientIds  = all ? [] : selClients.slice();
+      u.clients    = userClientsLabel(u);   // keep the Users & Roles label in sync
+      closeAdd(); renderRows();
+      flash(`Mapping saved for ${u.name} — ${userClientsLabel(u)}.`);
+    }
+
+    /* ---- misc ---- */
+    function flash(msg){ const b=$('banner'); b.textContent=msg; b.style.display='';
+      clearTimeout(flash._t); flash._t=setTimeout(()=>{ b.style.display='none'; },3500); }
+    function toggleFilter(b){ const f=$('filters'), h=f.style.display==='none';
+      f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    fillSelects();
+    renderRows();
+  </script>
+</body></html>

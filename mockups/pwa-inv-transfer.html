@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transfers — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Transfers" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <style>
+      .route { font-weight:700; }
+      .route .arr { color:var(--ink-faint); margin:0 5px; }
+      .tline { border:1px solid var(--line-soft); border-radius:var(--radius); padding:10px 12px; margin-bottom:10px; background:var(--white); }
+      .tline .lh { font-weight:700; font-size:13px; }
+      .tline .lh small { font-weight:400; color:var(--ink-soft); }
+      .ck { display:flex; gap:14px; margin:8px 0 4px; font-size:13px; flex-wrap:wrap; }
+      .ck .on { color:#235c25; font-weight:600; } .ck .off { color:var(--ink-faint); } .ck .ovr { color:#8a6d00; font-weight:600; }
+      .capnote { font-size:12px; margin-top:6px; } .capnote .ok { color:#235c25; } .capnote .bad { color:var(--bad); font-weight:600; }
+      .sum-row { display:flex; justify-content:space-between; gap:10px; padding:5px 0; border-bottom:1px solid var(--line-soft); font-size:13px; }
+      .sum-row:last-child { border-bottom:none; }
+      .req { color:var(--bad); }
+    </style>
+    <div id="trf-flash" class="sb-msg" style="display:none"></div>
+    <div id="trf"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('trf');
+    const TODAY = '2026-06-15';
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const uomOf = pid => prodUom(pid) || '';
+    const storageLocs = s => DB.locations.filter(l=>l.site===s && l.type==='storage' && l.status==='active');
+    // S.rows mirrors the open transfer's lines for the in-flight ship/receive interaction (no DB mutation until commit).
+    const S = { view:'list', tab:'ship', cur:null, rows:null, last:null };
+
+    function flash(t){ const m=$('trf-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('trf-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('trf-flash'); if(m) m.style.display='none'; }
+
+    const toShip    = () => DB.transfers.filter(t=>t.client===client() && t.fromSite===site() && t.status==='draft' && (!PWA.mineOnly() || isMine(t)));
+    const toReceive = () => DB.transfers.filter(t=>t.client===client() && t.toSite===site() && t.status==='in-transit' && (!PWA.mineOnly() || isMine(t)));
+    const doneList  = () => DB.transfers.filter(t=>t.client===client() && (t.fromSite===site()||t.toSite===site()) && (t.status==='received'||t.status==='cancelled'))
+                              .sort((a,b)=>String(b.received||b.created).localeCompare(String(a.received||a.created)));
+
+    /* ============================================================ LIST (To ship / To receive / Done) */
+    function tabsHtml(){
+      const tabs=[['ship',`To ship (${toShip().length})`],['receive',`To receive (${toReceive().length})`],['done','Done']];
+      return `<div class="tabs">${tabs.map(([k,l])=>`<a href="#" data-tab="${k}" class="${S.tab===k?'active':''}">${esc(l)}</a>`).join('')}</div>`;
+    }
+    function renderList(){
+      let list, empty, action;
+      const mine = S.tab!=='done' && PWA.mineOnly();      // self-claim only on the ship/receive task lists
+      if (S.tab==='ship'){ list=toShip(); empty='No draft transfers to ship from '+PWA.siteName()+(mine?' assigned to you':'')+'.'; action='Ship ›'; }
+      else if (S.tab==='receive'){ list=toReceive(); empty='Nothing in transit to '+PWA.siteName()+(mine?' assigned to you':'')+'.'; action='Receive ›'; }
+      else { list=doneList(); empty='No completed transfers at '+PWA.siteName()+'.'; action='View'; }
+      const cards = list.length ? list.map(t=>{
+        const qty=t.lines.reduce((s,l)=>s+(l.qty||0),0);
+        const badge = t.status==='draft'?'<span class="badge b-toputaway">draft</span>'
+          : t.status==='in-transit'?'<span class="badge b-allocated">in transit</span>'
+          : t.status==='received'?'<span class="badge b-available">received</span>'
+          : '<span class="badge b-cancelled">cancelled</span>';
+        // Assignee row: who it's dispatched to + a self-claim / release control (ship/receive task lists only).
+        const showClaim = S.tab!=='done';
+        const who   = t.assignee ? `${esc(assigneeName(t.assignee))}${isMine(t)?' · me':''}` : '<span class="muted">Any</span>';
+        const claim = !showClaim ? '' : t.assignee
+          ? (isMine(t) ? ` · <a href="#" class="claim-btn" data-rel="${t.id}">Release</a>` : '')
+          : ` · <a href="#" class="claim-btn" data-claim="${t.id}">Claim</a>`;
+        return `<div class="task" data-trf="${esc(t.id)}"><span class="meta"><b>${esc(t.id)}</b>
+          <small><span class="route">${esc(dbName('sites',t.fromSite))}<span class="arr">→</span>${esc(dbName('sites',t.toSite))}</span> · ${t.lines.length} plate(s) · ${qty} unit(s)</small>${showClaim?`
+          <small style="margin-top:3px">👤 ${who}${claim}</small>`:''}</span>${badge}</div>`;
+      }).join('') : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">${esc(empty)}${mine?' Switch to All above to see every transfer.':''}</p></div>`;
+      root.innerHTML = tabsHtml()
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">${S.tab==='ship'?'Drafts to ship':S.tab==='receive'?'Arriving — to receive':'Completed'} · ${esc(PWA.clientName())} @ ${esc(PWA.siteName())}</p>${cards}`
+        + (S.tab==='ship'?`<p class="scan-hint" style="text-align:left">New inter-site transfers are created in the ERP; the floor ships &amp; receives them here.</p>`:'');
+      root.querySelectorAll('[data-tab]').forEach(el=>el.onclick=e=>{ e.preventDefault(); S.tab=el.dataset.tab; render(); });
+      root.querySelectorAll('[data-trf]').forEach(el=>el.onclick=()=>openTransfer(el.dataset.trf));
+      // self-claim / release — stop the click bubbling to the card's openTransfer
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{
+        ev.preventDefault(); ev.stopPropagation();
+        const rec = DB.transfers.find(x=>x.id===(el.dataset.claim||el.dataset.rel)); if(!rec) return;
+        rec.assignee = el.dataset.claim ? DB.currentUserId : '';
+        PWA.save(); renderList();
+      });
+    }
+    function openTransfer(id){
+      const t=DB.transfers.find(x=>x.id===id); if(!t) return; S.cur=t;
+      if (t.status==='draft'){ S.rows=t.lines.map(()=>({ confirmed:false, override:false })); S.view='ship'; }
+      else if (t.status==='in-transit'){ S.rows=t.lines.map(l=>{ const f=storageLocs(t.toSite)[0]; return { dest:f?f.id:'', cond:'good', rqty:(l.qty||0), confirmed:false, override:false }; }); S.view='receive'; }
+      else S.view='doneview';
+      render();
+    }
+
+    /* ============================================================ SHIP (scan-confirm each plate → in-transit) */
+    function renderShip(){
+      const t=S.cur; if(!t){ S.view='list'; return render(); }
+      const body=t.lines.map((l,i)=>{
+        const src=lpnById(l.lpn)||{}; const partial=(l.qty||0)<(src.qty||0);
+        const r=S.rows[i]; const done=r.confirmed||r.override;
+        const fz=src.loc?frozenTakeFor(src.loc):null;
+        return `<div class="tline"><div class="lh">${esc(l.lpn)} <small>· ${esc(prodName(l.product))} · ship ${l.qty} ${esc(uomOf(l.product))}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''}${partial?` · <span style="color:#2c4a6b">splits — ${src.qty-l.qty} stays</span>`:''}</small></div>
+          <div class="muted" style="font-size:12px;margin-top:2px">at ${esc(locName(src.loc))}${fz?` · <span style="color:var(--bad)">⚠ frozen ${esc(fz.id)}</span>`:''}</div>
+          ${done?`<div class="ck"><span class="on">🏷 ${r.override?'manual':'scanned'} ✓</span></div>`
+            : PWAScan.field({ id:`sf-ship-${i}`, prompt:'Scan this plate to confirm', placeholder:esc(l.lpn), kinds:['lpn'], list:[{value:l.lpn,label:l.lpn,sub:'LPN'}], onScan:(c,res)=>onScanShip(i,res) })
+              + `<button class="btn btn-outline btn-sm" data-ovr="${i}" style="width:100%;margin-top:4px">Can’t scan? Confirm manually</button>`}</div>`;
+      }).join('');
+      const allDone=S.rows.every(r=>r.confirmed||r.override);
+      root.innerHTML=`
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(t.id)}</b> <span class="badge b-toputaway">draft</span>
+          <div class="muted" style="margin-top:4px"><span class="route">${esc(dbName('sites',t.fromSite))}<span class="arr">→</span>${esc(dbName('sites',t.toSite))}</span> · ${esc(dbName('clients',t.client))}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">Confirm each plate is in hand, then ship — plates go <b>in transit</b> (removed from ${esc(dbName('sites',t.fromSite))}).</div></div>
+        ${body}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="s-ship" style="width:100%"${allDone?'':' disabled'}>Ship ▸ (${t.lines.length} plate(s))</button>
+        <button class="btn btn-outline" id="s-back" style="width:100%">‹ Back</button>`;
+      root.querySelectorAll('[data-ovr]').forEach(el=>el.onclick=()=>{ S.rows[+el.dataset.ovr].override=true; render(); });
+      $('s-ship').onclick=commitShip;
+      $('s-back').onclick=()=>{ S.cur=null; S.rows=null; S.view='list'; render(); };
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanShip(i, res){
+      if (!res || res.type!=='lpn') return flash('Scan the plate (LPN).');
+      if (res.id!==S.cur.lines[i].lpn) return flash(`Wrong plate — expected ${S.cur.lines[i].lpn}.`);
+      S.rows[i].confirmed=true; render(); ok('Plate confirmed.');
+    }
+    function commitShip(){
+      const t=S.cur;
+      if (!S.rows.every(r=>r.confirmed||r.override)) return flash('Confirm every plate before shipping.');
+      for (const l of t.lines){ const src=lpnById(l.lpn); const fz=src&&frozenTakeFor(src.loc);
+        if (fz) return flash(`${src.id} is in a frozen stock-take (${fz.id}) — ship refused until it is posted/abandoned.`); }
+      let splits=0;
+      t.lines.forEach(l=>{ const src=lpnById(l.lpn); if(!src) return;
+        if ((l.qty||0) < src.qty){
+          const child={ id:nextLpnId(), client:src.client, site:src.site, product:src.product, qty:l.qty,
+            lot:src.lot||'', expiry:src.expiry||'', serials:(src.serials||[]).slice(), status:'in-transit', loc:src.loc };
+          src.qty-=l.qty; DB.lpns.push(child); l.lpn=child.id; splits++;
+          logTxn({ type:'transfer-ship', lpn:child.id, product:child.product, qty:l.qty, from:t.fromSite, to:t.toSite, site:t.fromSite, user:PWA.user, ref:t.id, note:`Shipped (split ${l.qty} from ${src.id}) ${dbName('sites',t.fromSite)}→${dbName('sites',t.toSite)}` });
+        } else {
+          src.status='in-transit';
+          logTxn({ type:'transfer-ship', lpn:src.id, product:src.product, qty:l.qty, from:t.fromSite, to:t.toSite, site:t.fromSite, user:PWA.user, ref:t.id, note:`Shipped ${dbName('sites',t.fromSite)}→${dbName('sites',t.toSite)}` });
+        }
+      });
+      t.status='in-transit'; t.shipped=TODAY; PWA.save();
+      S.last={ mode:'ship', id:t.id, plates:t.lines.length, splits, to:dbName('sites',t.toSite) };
+      S.cur=null; S.rows=null; S.view='done'; render();
+    }
+
+    /* ============================================================ RECEIVE (dest bin + condition per plate) */
+    // F7 — resolve the in-flight receive state of a line: condition, good qty, shortfall, effective dest bin.
+    function recvState(t,i){
+      const l=t.lines[i], r=S.rows[i]||{}; const cond=r.cond||'good'; const shipped=l.qty||0;
+      const qLoc=quarantineLocFor(t.toSite);
+      let recv=r.rqty; if(recv===''||recv==null||isNaN(recv)) recv=shipped; recv=Math.max(0,Math.min(recv,shipped));
+      let goodQty=recv, shortfall=0, dest=r.dest;
+      if(cond==='good'){ goodQty=shipped; recv=shipped; }
+      else if(cond==='damaged'){ goodQty=shipped; recv=shipped; dest=qLoc; }
+      else { goodQty=recv; shortfall=shipped-recv; }
+      return { l, r, cond, shipped, recv, goodQty, shortfall, dest, qLoc };
+    }
+    function renderReceive(){
+      const t=S.cur; if(!t){ S.view='list'; return render(); }
+      const body=t.lines.map((l,i)=>{
+        const s=recvState(t,i); const cond=s.cond;
+        const condSel=`<div class="ck" style="gap:8px"><label style="font-size:12px">Condition
+          <select data-cond="${i}" style="width:auto;margin-left:4px">
+            <option value="good"${cond==='good'?' selected':''}>Good</option>
+            <option value="damaged"${cond==='damaged'?' selected':''}>Damaged → quarantine</option>
+            <option value="short"${cond==='short'?' selected':''}>Short</option></select></label>
+          ${cond==='short'?`<label style="font-size:12px">Received <input data-rqty="${i}" type="number" min="0" max="${s.shipped}" value="${s.recv}" style="width:64px;text-align:right;margin-left:4px"></label>`:''}</div>`;
+        // damaged routes to quarantine automatically → no bin scan; good/short need a destination bin
+        const binBlock = cond==='damaged'
+          ? `<div class="capnote">${recvCapHtml(t,i)}</div>`
+          : PWAScan.field({ id:`sf-recv-${i}`, prompt:'Scan / pick the bin to receive into', placeholder:'LOC- / bin code',
+              kinds:['location'], list:storageLocs(t.toSite).map(x=>({value:x.id,label:x.structured||x.id,sub:x.area?'Area '+x.area:'bin'})), onScan:(c,res)=>onScanRecv(i,res) })
+            + `<div class="capnote" id="rcap-${i}">${recvCapHtml(t,i)}</div>`;
+        return `<div class="tline"><div class="lh">${esc(l.lpn)} <small>· ${esc(prodName(l.product))} · ${l.qty} ${esc(uomOf(l.product))}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''}</small></div>
+          ${condSel}${binBlock}</div>`;
+      }).join('');
+      const allOk=t.lines.every((l,i)=>recvOk(t,i));
+      root.innerHTML=`
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(t.id)}</b> <span class="badge b-allocated">in transit</span>
+          <div class="muted" style="margin-top:4px"><span class="route">${esc(dbName('sites',t.fromSite))}<span class="arr">→</span>${esc(dbName('sites',t.toSite))}</span> · ${esc(dbName('clients',t.client))}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">Set the <b>condition</b> per plate (Good · Damaged → quarantine · Short writes off the shortfall) and the destination bin. Capacity + segregation + freeze checked.</div></div>
+        ${body}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="r-recv" style="width:100%"${allOk?'':' disabled'}>Receive ▸ (${t.lines.length} plate(s))</button>
+        <button class="btn btn-outline" id="r-abandon" style="width:100%;color:var(--bad);border-color:var(--bad)">⚠ Write off / abandon — never arrived</button>
+        <button class="btn btn-outline" id="r-back" style="width:100%">‹ Back</button>`;
+      root.querySelectorAll('[data-cond]').forEach(el=>el.onchange=()=>{ S.rows[+el.dataset.cond].cond=el.value; render(); });
+      root.querySelectorAll('[data-rqty]').forEach(el=>el.oninput=()=>{ const i=+el.dataset.rqty; let v=parseInt(el.value,10); S.rows[i].rqty=isNaN(v)?'':v; const cap=$('rcap-'+i); if(cap) cap.innerHTML=recvCapHtml(S.cur,i); $('r-recv').disabled=!S.cur.lines.every((l,j)=>recvOk(S.cur,j)); });
+      $('r-recv').onclick=commitReceive;
+      $('r-abandon').onclick=()=>abandon(t);
+      $('r-back').onclick=()=>{ S.cur=null; S.rows=null; S.view='list'; render(); };
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanRecv(i, res){
+      if (!res || res.type!=='location') return flash('Scan a storage bin (LOC- / bin code).');
+      const b=res.entity;
+      if (b.site!==S.cur.toSite || b.type!=='storage' || b.status!=='active') return flash(`Pick an active storage bin at ${dbName('sites',S.cur.toSite)}.`);
+      S.rows[i].dest=b.id; render();
+    }
+    // F7 — a line is OK when its effective destination passes freeze/segregation/capacity for the qty going there.
+    function recvOk(t, i){ const s=recvState(t,i);
+      if(s.cond==='short' && !(s.recv>0)) return false;          // a short receipt must still take in ≥1 unit
+      const dest=s.dest; if(!dest) return false;
+      return !frozenTakeFor(dest) && binSegregationOk(dest, t.client) && binCapacityForAdd(dest, s.goodQty, s.l.product).ok;
+    }
+    function recvCapHtml(t, i){
+      const s=recvState(t,i);
+      if(s.cond==='damaged'){ return s.qLoc ? `<span class="bad">⚠ All ${s.shipped} → quarantine (${esc(locName(s.qLoc))}) as damaged.</span>`
+                                            : `<span class="bad">✗ No quarantine bin at ${esc(dbName('sites',t.toSite))} — cannot route damaged stock.</span>`; }
+      if(s.cond==='short' && !(s.recv>0)) return '<span class="bad">Enter the qty received (≥1).</span>';
+      if(!s.dest) return '<span class="bad">Scan / pick a bin.</span>';
+      const fz=frozenTakeFor(s.dest); if(fz) return `<span class="bad">✗ ${esc(locName(s.dest))} — frozen stock-take ${esc(fz.id)}.</span>`;
+      if(!binSegregationOk(s.dest, t.client)) return `<span class="bad">✗ ${esc(locName(s.dest))} — Area reserved for another client.</span>`;
+      const cap=binCapacityForAdd(s.dest, s.goodQty, s.l.product);
+      if(!cap.ok) return `<span class="bad">✗ ${esc(locName(s.dest))} over capacity — ${cap.fails.map(f=>f.after+'/'+f.limit+' '+f.dim).join(' · ')}.</span>`;
+      return `<span class="ok">✓ ${esc(locName(s.dest))} — ${s.cond==='short'?`${s.recv} good (${s.shortfall} short → written off)`:'fits'}.</span>`;
+    }
+    function commitReceive(){
+      const t=S.cur;
+      for (let i=0;i<t.lines.length;i++){ const s=recvState(t,i);
+        if (s.cond==='damaged' && !s.dest) return flash(`No quarantine bin at ${dbName('sites',t.toSite)} for ${t.lines[i].lpn}.`);
+        if (!recvOk(t,i)) return flash(`${t.lines[i].lpn}: set a condition + bin that fits (capacity + segregation + not frozen).`); }
+      let damaged=0, shortUnits=0;
+      t.lines.forEach((l,i)=>{ const s=recvState(t,i), lp=lpnById(l.lpn); if(!lp) return;
+        if(s.cond==='damaged'){
+          lp.site=t.toSite; lp.loc=s.dest; lp.status='damaged'; lp.qty=s.goodQty; l.recvLoc=s.dest; l.condition='damaged'; damaged++;
+          logTxn({ type:'transfer-receive', lpn:lp.id, product:lp.product, qty:s.goodQty, from:t.fromSite, to:s.dest, site:t.toSite, user:PWA.user, ref:t.id, note:`Received DAMAGED at ${dbName('sites',t.toSite)} ${locName(s.dest)} → quarantine` });
+        } else if(s.cond==='short'){
+          lp.site=t.toSite; lp.loc=s.dest; lp.status='available'; lp.qty=s.goodQty; l.recvLoc=s.dest; l.condition='short'; shortUnits+=s.shortfall;
+          logTxn({ type:'transfer-receive', lpn:lp.id, product:lp.product, qty:s.goodQty, from:t.fromSite, to:s.dest, site:t.toSite, user:PWA.user, ref:t.id, note:`Received ${s.goodQty} at ${dbName('sites',t.toSite)} ${locName(s.dest)} (short ${s.shortfall})` });
+          const lost={ id:nextLpnId(), client:lp.client, site:t.toSite, product:lp.product, qty:s.shortfall, lot:lp.lot||'', expiry:lp.expiry||'', serials:[], status:'lost', loc:s.dest };
+          DB.lpns.push(lost);
+          logTxn({ type:'transfer-loss', lpn:lost.id, product:lost.product, qty:s.shortfall, from:t.fromSite, to:t.toSite, site:t.toSite, user:PWA.user, ref:t.id, note:`In-transit short — ${s.shortfall} lost vs ${lp.id} (shipped ${s.shipped}, received ${s.goodQty})` });
+        } else {
+          lp.site=t.toSite; lp.loc=s.dest; lp.status='available'; l.recvLoc=s.dest; l.condition='good';
+          logTxn({ type:'transfer-receive', lpn:lp.id, product:lp.product, qty:l.qty, from:t.fromSite, to:s.dest, site:t.toSite, user:PWA.user, ref:t.id, note:`Received at ${dbName('sites',t.toSite)} ${locName(s.dest)}` });
+        } });
+      t.status='received'; t.received=TODAY; PWA.save();
+      S.last={ mode:'receive', id:t.id, plates:t.lines.length, at:dbName('sites',t.toSite), damaged, shortUnits };
+      S.cur=null; S.rows=null; S.view='done'; render();
+    }
+    // F7 — in-transit write-off / abandon (never arrived): every plate becomes lost (qty 0), the transfer is cancelled.
+    function abandon(t){
+      if(!t||t.status!=='in-transit') return;
+      const reason=window.prompt(`Write off / abandon ${t.id}?\nEvery in-transit plate is marked LOST (qty 0) and the transfer is cancelled.\n\nReason (required):`,'');
+      if(reason==null) return;
+      if(!reason.trim()){ flash('A reason is required to write off an in-transit transfer.'); return; }
+      t.lines.forEach(l=>{ const lp=lpnById(l.lpn); if(!lp) return; const wasQty=lp.qty;
+        lp.status='lost'; lp.qty=0; l.condition='lost';
+        logTxn({ type:'transfer-loss', lpn:lp.id, product:lp.product, qty:wasQty, from:t.fromSite, to:t.toSite, site:t.fromSite, user:PWA.user, ref:t.id, note:`In-transit write-off · ${reason.trim()}` }); });
+      t.status='cancelled';
+      logTxn({ type:'transfer-cancel', site:t.fromSite, user:PWA.user, ref:t.id, note:`Transfer abandoned · ${reason.trim()}` });
+      PWA.save();
+      S.last={ mode:'abandon', id:t.id, plates:t.lines.length, reason:reason.trim() };
+      S.cur=null; S.rows=null; S.view='done'; render();
+    }
+
+    /* ============================================================ DONE + read-only view */
+    function renderDone(){
+      const L=S.last||{};
+      const msg = L.mode==='ship'
+        ? `<b>${esc(L.id)}</b> shipped — ${L.plates} plate(s) in transit to ${esc(L.to)}${L.splits?` (${L.splits} split)`:''}.`
+        : L.mode==='abandon'
+        ? `<b>${esc(L.id)}</b> written off — ${L.plates} plate(s) marked lost, transfer cancelled. Reason: ${esc(L.reason)}.`
+        : `<b>${esc(L.id)}</b> received at ${esc(L.at)} — ${L.plates} plate(s)${L.damaged?` · ${L.damaged} to quarantine (damaged)`:''}${L.shortUnits?` · ${L.shortUnits} unit(s) written off (short)`:''}.`;
+      root.innerHTML=`
+        <div class="success"><div class="check">✓</div><p>${msg}</p></div>
+        <button class="btn btn-primary" id="d-list" style="width:100%">Back to transfers</button>
+        <button class="btn btn-outline" id="d-home" style="width:100%">Home</button>`;
+      $('d-list').onclick=()=>{ S.last=null; S.tab=L.mode==='ship'?'receive':'done'; S.view='list'; render(); };
+      $('d-home').onclick=()=>{ location.href='pwa-home.html'; };
+    }
+    function renderDoneView(){
+      const t=S.cur; if(!t){ S.view='list'; return render(); }
+      const lines=t.lines.map(l=>`<div class="sum-row"><span>${esc(l.lpn)} <span class="muted">${esc(prodName(l.product))} · ${l.qty}</span></span><span class="mono">${l.recvLoc?esc(locName(l.recvLoc)):'—'}</span></div>`).join('');
+      root.innerHTML=`
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(t.id)}</b> ${t.status==='received'?'<span class="badge b-available">received</span>':'<span class="badge b-cancelled">cancelled</span>'}
+          <div class="muted" style="margin-top:4px"><span class="route">${esc(dbName('sites',t.fromSite))}<span class="arr">→</span>${esc(dbName('sites',t.toSite))}</span>${t.received?' · received '+esc(t.received):''}</div></div>
+        <div class="panel" style="margin-bottom:10px">${lines}</div>
+        <button class="btn btn-outline" id="dv-back" style="width:100%">‹ Back to transfers</button>`;
+      $('dv-back').onclick=()=>{ S.cur=null; S.tab='done'; S.view='list'; render(); };
+    }
+
+    function render(){
+      flashClear();
+      ({ list:renderList, ship:renderShip, receive:renderReceive, done:renderDone, doneview:renderDoneView }[S.view] || renderList)();
+    }
+    const q=new URLSearchParams(location.search), deep=q.get('trf');
+    if (deep && DB.transfers.find(t=>t.id===deep)) openTransfer(deep); else render();
+  })();
+  </script>
+</body>
+</html>

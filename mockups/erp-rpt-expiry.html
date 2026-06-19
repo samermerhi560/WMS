@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Expiry & Aging — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-expiry" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Expiry & Aging">
+  <div id="page-content">
+    <style>
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-exp  { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .tag.tag-30   { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-60   { border-color:#caa24a; background:#fdf7ea; color:#8a6a17; }
+      .tag.tag-ok   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      table.wf tr.exp td { background:#fcf5f5; }
+      .print-only.phead { margin-bottom:10px; }
+    </style>
+
+    <div class="print-only phead"><h1>Expiry &amp; Aging</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Expiry &amp; Aging</h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">Expiry-centric stock health: already-expired, expiring within 30 / 60 / 90 days, plus <b>aging</b>
+      (days in stock since receipt) to surface slow / dead inventory. "Today" is mocked at <b id="today"></b>.</p>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Filters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>Site</span><select id="f-site"></select></label>
+        <label class="field"><span>Client</span><select id="f-client"></select></label>
+        <label class="field"><span>Product</span><select id="f-product"></select></label>
+        <label class="field"><span>Expiry bucket</span><select id="f-bucket">
+          <option value="all">All (expiry-tracked)</option>
+          <option value="soon">Expiring ≤ 90 days (incl. expired)</option>
+          <option value="expired">Already expired</option>
+          <option value="b30">0–30 days</option>
+          <option value="b60">31–60 days</option>
+          <option value="b90">61–90 days</option>
+          <option value="ok">90+ days</option>
+          <option value="none">Non-expiry (aging only)</option>
+        </select></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="table-toolbar no-print">
+      <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+      <button class="btn btn-sm btn-outline" onclick="window.print()">Print</button>
+      <span class="chip">↑ Expiry date <span class="x">✕</span></span>
+      <span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th><span class="funnel">▾</span>LPN</th>
+        <th><span class="funnel">▾</span>Product</th>
+        <th><span class="funnel">▾</span>Lot</th>
+        <th><span class="funnel">▾</span>Expiry</th>
+        <th class="num">Days to expiry</th>
+        <th>Bucket</th>
+        <th class="num">On-hand</th>
+        <th><span class="funnel">▾</span>Location</th>
+        <th><span class="funnel">▾</span>Received</th>
+        <th class="num">Age (days)</th>
+        <th>Notes</th>
+      </tr></thead><tbody id="rows"></tbody></table>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const daysTo = d => d ? Math.round((new Date(d) - new Date(WMS_TODAY)) / 864e5) : null;
+    const state = { site:'S-LYON', client:'all', product:'all', bucket:'all' };
+
+    // earliest 'receive' txn date for a plate → received date (for aging). Falls back to null.
+    function receivedDate(lpnId){
+      const recs = (DB.txns||[]).filter(t=>t.lpn===lpnId && t.type==='receive').map(t=>String(t.ts).slice(0,10)).sort();
+      return recs[0] || null;
+    }
+    function ageDays(lpnId){ const d=receivedDate(lpnId); return d? Math.round((new Date(WMS_TODAY)-new Date(d))/864e5) : null; }
+
+    function tracksExpiry(l){ const p=DB.products.find(x=>x.id===l.product); return !!(p&&p.track&&p.track.expiry); }
+    function bucketOf(l){
+      if (!tracksExpiry(l) || !l.expiry) return 'none';
+      const dd = daysTo(l.expiry);
+      if (dd<0) return 'expired';
+      if (dd<=30) return 'b30';
+      if (dd<=60) return 'b60';
+      if (dd<=90) return 'b90';
+      return 'ok';
+    }
+    const BUCKET_TAG = {
+      expired:['tag-exp','expired'], b30:['tag-30','0–30 d'], b60:['tag-60','31–60 d'],
+      b90:['tag-60','61–90 d'], ok:['tag-ok','90+ d'], none:['','—'] };
+
+    function rowsData(){
+      return onHandLpns(state.site).filter(l=>{
+        if (state.client!=='all'  && l.client!==state.client)   return false;
+        if (state.product!=='all' && l.product!==state.product) return false;
+        const b = bucketOf(l);
+        if (state.bucket==='all'  && b==='none') return false;     // expiry-tracked only
+        if (state.bucket==='soon' && !['expired','b30','b60','b90'].includes(b)) return false;
+        if (['expired','b30','b60','b90','ok','none'].includes(state.bucket) && b!==state.bucket) return false;
+        return true;
+      }).sort((a,b)=>String(a.expiry||'9999-12-31').localeCompare(String(b.expiry||'9999-12-31')));
+    }
+
+    function render(){
+      const list = rowsData();
+      $('rows').innerHTML = list.length ? list.map(l=>{
+        const b = bucketOf(l), dd = daysTo(l.expiry);
+        const [cls,lbl] = BUCKET_TAG[b];
+        const rd = receivedDate(l.id), age = ageDays(l.id);
+        return `<tr class="${b==='expired'?'exp':''}">
+          <td class="mono">${l.id}</td>
+          <td>${esc(prodName(l.product))}</td>
+          <td class="mono">${esc(l.lot||'—')}</td>
+          <td>${b==='none'?'<span class="muted">—</span>':esc(l.expiry)}</td>
+          <td class="num">${b==='none'?'<span class="muted">—</span>':(dd<0?`<span class="neg">${dd}</span>`:dd)}</td>
+          <td>${b==='none'?'<span class="muted">non-expiry</span>':`<span class="tag ${cls}">${lbl}</span>`}</td>
+          <td class="num">${l.qty}</td>
+          <td class="mono">${esc(locName(l.loc))}</td>
+          <td class="mono">${rd?esc(rd):'<span class="muted">—</span>'}</td>
+          <td class="num">${age==null?'<span class="muted">—</span>':(age>=180?`<span class="neg">${age}</span>`:age)}</td>
+          <td>${noteFor(l.id) || '<span class="muted">—</span>'}</td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="11" class="muted" style="padding:18px">No stock matches the filters.</td></tr>`;
+
+      // KPIs across the full site/client/product scope (ignoring bucket filter)
+      const scope = onHandLpns(state.site).filter(l=>(state.client==='all'||l.client===state.client)&&(state.product==='all'||l.product===state.product));
+      const sumU = b => scope.filter(l=>bucketOf(l)===b).reduce((s,l)=>s+(l.qty||0),0);
+      const cntB = b => scope.filter(l=>bucketOf(l)===b).length;
+      $('kpis').innerHTML = `
+        <div class="kpi k-bad"><span class="k-label">Expired</span><span class="k-val">${cntB('expired')}</span><span class="k-sub">${sumU('expired')} units</span></div>
+        <div class="kpi k-warn"><span class="k-label">≤ 30 days</span><span class="k-val">${cntB('b30')}</span><span class="k-sub">${sumU('b30')} units</span></div>
+        <div class="kpi k-warn"><span class="k-label">31–60 days</span><span class="k-val">${cntB('b60')}</span><span class="k-sub">${sumU('b60')} units</span></div>
+        <div class="kpi"><span class="k-label">61–90 days</span><span class="k-val">${cntB('b90')}</span><span class="k-sub">${sumU('b90')} units</span></div>
+        <div class="kpi k-good"><span class="k-label">90+ days</span><span class="k-val">${cntB('ok')}</span><span class="k-sub">${sumU('ok')} units</span></div>`;
+      $('summary').textContent = `${list.length} plate(s) shown · scope: ${dbName('sites',state.site)}`;
+      $('p-filters').textContent = `Site: ${dbName('sites',state.site)}  ·  Client: ${state.client==='all'?'All':dbName('clients',state.client)}  ·  Bucket: ${state.bucket}  ·  as of ${WMS_TODAY}`;
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('today').textContent = WMS_TODAY;
+    $('f-site').innerHTML    = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-client').innerHTML  = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-product').innerHTML = `<option value="all">All products</option>` + DB.products.map(p=>`<option value="${p.id}">${esc(prodName(p.id))}</option>`).join('');
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; render(); });
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; render(); });
+    $('f-product').addEventListener('change',e=>{ state.product=e.target.value; render(); });
+    $('f-bucket').addEventListener('change', e=>{ state.bucket=e.target.value; render(); });
+    render();
+  </script>
+</body></html>

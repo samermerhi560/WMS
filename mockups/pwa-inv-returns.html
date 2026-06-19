@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Returns / Put-back — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Returns / Put-back" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <style>
+      .seg { display:flex; gap:8px; margin:4px 0 12px; }
+      .seg button { flex:1; border:1.5px solid var(--line); background:var(--white); border-radius:var(--radius); padding:10px; font:inherit; cursor:pointer; }
+      .seg button.on { border-color:var(--brand); background:var(--brand-tint); font-weight:700; }
+      .seg button small { display:block; font-weight:400; color:var(--ink-soft); font-size:11px; }
+      .ret-line { border:1px solid var(--line-soft); border-radius:var(--radius); padding:10px 12px; margin-bottom:10px; background:var(--white); }
+      .ret-line .lh { font-weight:700; font-size:13px; }
+      .ret-line .lh small { font-weight:400; color:var(--ink-soft); }
+      .disp { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 4px; }
+      .disp button { border:1.5px solid var(--line); background:var(--white); border-radius:14px; padding:5px 10px; font:inherit; font-size:12px; cursor:pointer; }
+      .disp button.on { border-color:var(--brand); background:var(--brand-tint); font-weight:600; }
+      .disp button.block.on { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .capnote { font-size:12px; margin-top:6px; }
+      .capnote .ok { color:#235c25; } .capnote .bad { color:var(--bad); font-weight:600; }
+      .sum-row { display:flex; justify-content:space-between; gap:10px; padding:5px 0; border-bottom:1px solid var(--line-soft); font-size:13px; }
+      .sum-row:last-child { border-bottom:none; }
+      .req { color:var(--bad); }
+    </style>
+    <div id="ret-flash" class="sb-msg" style="display:none"></div>
+    <div id="ret"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,Math.floor(Number(v)||0)));
+    const root = $('ret');
+    const TODAY = '2026-06-15';
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const uomOf = pid => prodUom(pid) || '';
+    const KIND_LABEL = { putback:'Put-back', customer:'Customer return' };
+    const DISP_LABEL = { 'restock-direct':'Restock → bin', 'restock-putaway':'Restock → via Putaway', quarantine:'Quarantine', damaged:'Damaged' };
+    const isRestock = d => d==='restock'||d==='restock-direct'||d==='restock-putaway';
+    const storLocs = () => DB.locations.filter(l=>l.site===site() && l.type==='storage' && l.status==='active');
+    const stagingLoc = () => stagingLocFor(site());
+    const quarLoc = () => quarantineLocFor(site());
+    const nextRetId = () => { let n=9000; DB.returns.forEach(r=>{ const m=/RET-(\d+)/.exec(r.id); if(m) n=Math.max(n,+m[1]); }); return 'RET-'+(n+1); };
+
+    // S.new = { kind, ref, lines:[{product,qty,lot,expiry,serials,reason}] } while building; S.cur = the return being processed.
+    const S = { view:'list', tab:'open', cur:null, neu:null, add:null, last:null };
+
+    function flash(t){ const m=$('ret-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('ret-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('ret-flash'); if(m) m.style.display='none'; }
+
+    /* ============================================================ LIST (To process / Processed) */
+    function tabsHtml(){
+      return `<div class="tabs">
+        <a href="#" id="t-open" class="${S.tab!=='done'?'active':''}">To process</a>
+        <a href="#" id="t-done" class="${S.tab==='done'?'active':''}">Processed</a></div>`;
+    }
+    function wireTabs(){ const o=$('t-open'),d=$('t-done');
+      if(o) o.onclick=e=>{e.preventDefault(); S.tab='open'; render();};
+      if(d) d.onclick=e=>{e.preventDefault(); S.tab='done'; render();}; }
+    function renderList(){
+      const open = S.tab!=='done';
+      const list = DB.returns.filter(r=>r.site===site() && r.client===client() && (open ? r.status==='open' : r.status==='closed') && (!open || !PWA.mineOnly() || isMine(r)))
+        .sort((a,b)=>String(b.created).localeCompare(String(a.created)) || String(b.id).localeCompare(String(a.id)));
+      const cards = list.length ? list.map(r=>{
+        const qty=r.lines.reduce((s,l)=>s+(l.qty||0),0);
+        const tag = `<span class="badge ${r.status==='open'?'b-toputaway':'b-available'}">${r.status==='open'?'process':'closed'}</span>`;
+        // Assignee row: who it's dispatched to + a self-claim / release control (only on open/to-process returns).
+        const who   = r.assignee ? `${esc(assigneeName(r.assignee))}${isMine(r)?' · me':''}` : '<span class="muted">Any</span>';
+        const claim = !open ? '' : r.assignee
+          ? (isMine(r) ? ` · <a href="#" class="claim-btn" data-rel="${r.id}">Release</a>` : '')
+          : ` · <a href="#" class="claim-btn" data-claim="${r.id}">Claim</a>`;
+        return `<div class="task" data-ret="${esc(r.id)}"><span class="meta"><b>${esc(r.id)}</b>
+          <small>${esc(KIND_LABEL[r.kind]||r.kind)}${r.ref?' · '+esc(r.ref):''} · ${r.lines.length} line(s) · ${qty} unit(s)${r.created?' · '+esc(r.created):''}</small>
+          <small style="margin-top:3px">👤 ${who}${claim}</small></span>${tag}</div>`;
+      }).join('') : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No ${open?'returns to process':'processed returns'} at ${esc(PWA.siteName())}${open&&PWA.mineOnly()?' assigned to you — switch to <b>All</b> above to see every return':''}.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + (open ? `<button class="btn btn-primary" id="r-new" style="width:100%;margin-bottom:8px">＋ New return / put-back</button>` : '')
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">${open?'Open returns':'Processed returns'} at ${esc(PWA.siteName())} (${list.length})</p>${cards}`;
+      wireTabs();
+      const nb=$('r-new'); if(nb) nb.onclick=openNew;
+      root.querySelectorAll('[data-ret]').forEach(el=>el.onclick=()=>openReturn(el.dataset.ret));
+      // self-claim / release — stop the click bubbling to the card's openReturn
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{
+        ev.preventDefault(); ev.stopPropagation();
+        const rec = DB.returns.find(x=>x.id===(el.dataset.claim||el.dataset.rel)); if(!rec) return;
+        rec.assignee = el.dataset.claim ? DB.currentUserId : '';
+        PWA.save(); renderList();
+      });
+    }
+    function openReturn(id){ S.cur=DB.returns.find(r=>r.id===id)||null; if(!S.cur) return; S.view = S.cur.status==='open' ? 'process' : 'done-view'; render(); }
+
+    /* ============================================================ NEW (build lines, then process) */
+    function openNew(){ S.neu={ kind:'putback', ref:'', lines:[] }; S.view='new'; render(); }
+    function renderNew(){
+      const n=S.neu;
+      const refs = DB.outbound.filter(o=>o.client===client() && ['dispatched','partial','picked'].includes(o.status));
+      const lines = n.lines.length ? n.lines.map((l,i)=>`<div class="sum-row"><span>${esc(prodName(l.product))} <span class="muted">· ${l.qty} ${esc(uomOf(l.product))}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''} · ${esc(l.reason)}</span></span><a href="#" data-rm="${i}" style="color:var(--bad)">remove</a></div>`).join('') : '<p class="scan-hint" style="text-align:left">No lines yet — scan a product to add the first.</p>';
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b>New return</b>
+          <div class="seg" style="margin-top:8px">
+            <button id="k-putback"  class="${n.kind==='putback'?'on':''}">Put-back<small>over-pick / unused → bin</small></button>
+            <button id="k-customer" class="${n.kind==='customer'?'on':''}">Customer return<small>post-dispatch → re-inspect</small></button>
+          </div>
+          <label class="field"><span>Source order (optional)</span>
+            <select id="n-ref"><option value="">— none —</option>${refs.map(o=>`<option value="${o.id}"${o.id===n.ref?' selected':''}>${esc(o.id)}${o.ref?' · '+esc(o.ref):''}</option>`).join('')}</select></label>
+        </div>
+        ${PWAScan.field({ id:'sf-radd', prompt:'Scan a returned product', placeholder:'P-1002 · SKU / barcode', kinds:['product','lpn'], onScan:onScanReturnAdd })}
+        <div class="panel" style="margin:8px 0">${lines}</div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="n-next" style="width:100%"${n.lines.length?'':' disabled'}>Disposition &amp; process ›</button>
+        <button class="btn btn-outline" id="n-cancel" style="width:100%">‹ Cancel</button>`;
+      $('k-putback').onclick=()=>{ n.kind='putback'; render(); };
+      $('k-customer').onclick=()=>{ n.kind='customer'; render(); };
+      const rf=$('n-ref'); if(rf) rf.onchange=()=>{ n.ref=rf.value; };
+      root.querySelectorAll('[data-rm]').forEach(el=>el.onclick=e=>{ e.preventDefault(); n.lines.splice(+el.dataset.rm,1); render(); });
+      $('n-next').onclick=saveAndProcess;
+      $('n-cancel').onclick=()=>{ S.neu=null; S.view='list'; render(); };
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanReturnAdd(code, r){
+      let pid=null, lpn=null;
+      if (r && r.type==='product') pid=r.id;
+      else if (r && r.type==='lpn'){ pid=r.entity.product; lpn=r.entity; }
+      else return flash('Scan a product (SKU / barcode) or an LPN.');
+      const p=DB.products.find(x=>x.id===pid);
+      if (!p || (p.client && p.client!==client())) return flash('That product belongs to another client.');
+      S.add={ product:pid, qty:lpn?(lpn.qty||1):1, lot:lpn&&tracksLot(pid)?(lpn.lot||''):'', expiry:lpn&&tracksExpiry(pid)?(lpn.expiry||''):'', reason:reasonsFor('return')[0]||'' };
+      S.view='addline'; render();
+    }
+    function renderAddLine(){
+      const a=S.add, reasons=reasonsFor('return');
+      root.innerHTML=`
+        <div class="panel" style="margin-bottom:10px"><b>${esc(prodName(a.product))}</b>
+          <div class="muted" style="margin-top:4px">${esc(trackingSummary(a.product))}</div></div>
+        <label class="field"><span>Quantity returned</span><input id="al-qty" type="number" min="1" step="1" value="${a.qty}"></label>
+        ${tracksLot(a.product)?`<label class="field"><span>Lot</span><input id="al-lot" type="text" value="${esc(a.lot)}" placeholder="lot / batch"></label>`:''}
+        ${tracksExpiry(a.product)?`<label class="field"><span>Expiry</span><input id="al-exp" type="date" value="${esc(a.expiry)}"></label>`:''}
+        <label class="field"><span>Reason</span><select id="al-reason">${reasons.map(rr=>`<option${rr===a.reason?' selected':''}>${esc(rr)}</option>`).join('')}</select></label>
+        <button class="btn btn-primary" id="al-add" style="width:100%">Add line</button>
+        <button class="btn btn-outline" id="al-cancel" style="width:100%">‹ Back</button>`;
+      $('al-add').onclick=()=>{
+        const qty=Math.max(1,clamp(($('al-qty')||{}).value,1,1e9));
+        const lot=tracksLot(a.product)?String(($('al-lot')||{}).value||'').trim():'';
+        const expiry=tracksExpiry(a.product)?String(($('al-exp')||{}).value||''):'';
+        S.neu.lines.push({ product:a.product, qty, lot, expiry, serials:[], reason:($('al-reason')||{}).value });
+        S.add=null; S.view='new'; render(); ok('Line added.');
+      };
+      $('al-cancel').onclick=()=>{ S.add=null; S.view='new'; render(); };
+      const i=$('al-qty'); if(i) i.focus();
+    }
+    function saveAndProcess(){
+      const n=S.neu; if(!n.lines.length) return flash('Add at least one line.');
+      const r={ id:nextRetId(), kind:n.kind, client:client(), site:site(), ref:n.ref||'', status:'open', created:TODAY, by:PWA.user,
+        lines:n.lines.map(l=>({ ...l, disposition:'', toLoc:'', lpn:'' })) };
+      DB.returns.push(r); PWA.save();
+      S.neu=null; S.cur=r; S.view='process'; render();
+    }
+
+    /* ============================================================ PROCESS (disposition per line → close) */
+    function renderProcess(){
+      const r=S.cur; if(!r){ S.view='list'; return render(); }
+      const body = r.lines.map((l,i)=>{
+        const d=l.disposition;
+        const chip=(val,label,block)=>`<button data-disp="${i}:${val}" class="${block?'block ':''}${d===val?'on':''}">${esc(label)}</button>`;
+        let dest='';
+        if (d==='restock-direct'){
+          dest = `${PWAScan.field({ id:`sf-loc-${i}`, prompt:'Scan / pick the restock bin', placeholder:'LOC- / bin code',
+            kinds:['location'], list:storLocs().map(x=>({value:x.id,label:x.structured||x.id,sub:'bin'})), onScan:(c,res)=>onScanBin(i,res) })}
+            <div class="capnote" id="cap-${i}">${capNoteHtml(l)}</div>`;
+        } else if (d==='restock-putaway'){
+          dest = `<div class="muted" style="font-size:12px">→ staging <b>${esc(locName(stagingLoc())||'—')}</b> · enters the directed-putaway queue (slotting + guards applied there).</div>`;
+        } else if (d==='quarantine'||d==='damaged'){
+          dest = `<div class="muted" style="font-size:12px">→ <b>${esc(locName(quarLoc())||'—')}</b> · blocked (excluded from allocation).</div>`;
+        }
+        return `<div class="ret-line"><div class="lh">${esc(prodName(l.product))}
+          <small>· ${l.qty} ${esc(uomOf(l.product))}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''}${tracksExpiry(l.product)&&l.expiry?' · exp '+esc(l.expiry):''} · ${esc(l.reason)}</small></div>
+          <div class="disp">${chip('restock-direct','Restock → bin')}${chip('restock-putaway','Via Putaway')}${chip('quarantine','Quarantine',true)}${chip('damaged','Damaged',true)}</div>
+          ${dest}</div>`;
+      }).join('');
+      const ready = r.lines.every(l=>l.disposition && (l.disposition!=='restock-direct' || (l.toLoc && binOk(l))));
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b>${esc(KIND_LABEL[r.kind]||r.kind)} <span class="mono">${esc(r.id)}</span></b>
+          <div class="muted" style="margin-top:4px">${esc(dbName('clients',r.client))} · ${esc(PWA.siteName())}${r.ref?' · ref '+esc(r.ref):''} · ${r.lines.length} line(s)</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">Choose a disposition per line. <b>Restock → bin</b> = available now (capacity + segregation checked). <b>Via Putaway</b> = staging → directed task. <b>Quarantine/Damaged</b> = blocked plate.</div></div>
+        ${body}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="p-close" style="width:100%"${ready?'':' disabled'}>Process &amp; close</button>
+        <button class="btn btn-outline" id="p-back" style="width:100%">‹ Back</button>`;
+      root.querySelectorAll('[data-disp]').forEach(el=>el.onclick=()=>{
+        const [i,val]=el.dataset.disp.split(':'); const l=r.lines[+i];
+        l.disposition = l.disposition===val ? '' : val;
+        if (l.disposition==='restock-direct' && !l.toLoc){ const f=storLocs()[0]; l.toLoc=f?f.id:''; }
+        if (l.disposition!=='restock-direct') l.toLoc='';
+        render();
+      });
+      $('p-close').onclick=processClose;
+      $('p-back').onclick=()=>{ S.cur=null; S.view='list'; render(); };
+    }
+    function onScanBin(i, res){
+      if (!res || res.type!=='location') return flash('Scan a storage bin (LOC- / bin code).');
+      const b=res.entity;
+      if (b.site!==site() || b.type!=='storage' || b.status!=='active') return flash('Pick an active storage bin at this site.');
+      S.cur.lines[i].toLoc=b.id; render();
+    }
+    function binOk(l){ return binSegregationOk(l.toLoc, S.cur.client) && binCapacityForAdd(l.toLoc, l.qty, l.product).ok; }
+    function capNoteHtml(l){
+      if(!l.toLoc) return '<span class="bad">Scan / pick a bin.</span>';
+      if(!binSegregationOk(l.toLoc, S.cur.client)) return `<span class="bad">✗ ${esc(locName(l.toLoc))} — Area reserved for another client. Use Via Putaway or another bin.</span>`;
+      const cap=binCapacityForAdd(l.toLoc, l.qty, l.product);
+      if(!cap.ok) return `<span class="bad">✗ ${esc(locName(l.toLoc))} over capacity — ${cap.fails.map(f=>f.after+'/'+f.limit+' '+f.dim).join(' · ')}. Use Via Putaway or another bin.</span>`;
+      return `<span class="ok">✓ ${esc(locName(l.toLoc))} — fits.</span>`;
+    }
+    function processClose(){
+      const r=S.cur;
+      if (r.lines.some(l=>!l.disposition)) return flash('Choose a disposition for every line.');
+      const staging=stagingLoc(), quar=quarLoc();
+      if (r.lines.some(l=>l.disposition==='restock-putaway') && !staging) return flash('No inbound-staging location at this site for Putaway routing.');
+      if (r.lines.some(l=>l.disposition==='quarantine'||l.disposition==='damaged') && !quar) return flash('No quarantine location at this site.');
+      for (const l of r.lines){ if (l.disposition==='restock-direct' && !binOk(l)) return flash(`${prodName(l.product)}: pick a bin that fits (capacity + segregation), or use Via Putaway.`); }
+      let restocked=0,toPutaway=0,blocked=0;
+      r.lines.forEach(l=>{
+        const id=nextLpnId(); let status,finalLoc;
+        if (l.disposition==='restock-direct'){ status='available'; finalLoc=l.toLoc; restocked++; }
+        else if (l.disposition==='restock-putaway'){ status='to-putaway'; finalLoc=staging; toPutaway++; }
+        else { status=l.disposition; finalLoc=quar; blocked++; }
+        DB.lpns.push({ id, client:r.client, site:r.site, product:l.product, qty:l.qty, lot:l.lot||'', expiry:l.expiry||'', serials:(l.serials||[]).slice(), status, loc:finalLoc });
+        l.toLoc=finalLoc; l.lpn=id;
+        logTxn({ type:'return', lpn:id, product:l.product, qty:l.qty, to:finalLoc, site:r.site, user:PWA.user, ref:r.id,
+          note:`${KIND_LABEL[r.kind]} → ${DISP_LABEL[l.disposition]||l.disposition} (${l.reason})${l.disposition==='restock-putaway'?' — directed putaway pending':''}` });
+      });
+      r.status='closed'; r.closed=TODAY; PWA.save();
+      S.last={ id:r.id, restocked, toPutaway, blocked, lines:r.lines.slice() };
+      S.cur=null; S.view='done'; render();
+    }
+
+    /* ============================================================ DONE + read-only view */
+    function renderDone(){
+      const L=S.last||{};
+      const parts=[]; if(L.restocked)parts.push(`${L.restocked} restocked`); if(L.toPutaway)parts.push(`${L.toPutaway} to putaway`); if(L.blocked)parts.push(`${L.blocked} blocked`);
+      const lines=(L.lines||[]).map(l=>`<div class="sum-row"><span>${esc(prodName(l.product))} <span class="muted">→ ${esc(DISP_LABEL[l.disposition]||l.disposition)}</span></span><span class="mono">${esc(l.lpn)} · ${esc(locName(l.toLoc))}</span></div>`).join('');
+      root.innerHTML=`
+        <div class="success"><div class="check">✓</div><p><b>${esc(L.id)}</b> processed · ${esc(parts.join(', ')||'no lines')}.</p></div>
+        <div class="panel" style="margin:10px 0">${lines}</div>
+        <button class="btn btn-primary" id="d-more" style="width:100%">New return</button>
+        <button class="btn btn-outline" id="d-list" style="width:100%">Back to returns</button>
+        <button class="btn btn-outline" id="d-home" style="width:100%">Home</button>`;
+      $('d-more').onclick=openNew;
+      $('d-list').onclick=()=>{ S.last=null; S.tab='done'; S.view='list'; render(); };
+      $('d-home').onclick=()=>{ location.href='pwa-home.html'; };
+    }
+    function renderDoneView(){
+      const r=S.cur; if(!r){ S.view='list'; return render(); }
+      const lines=r.lines.map(l=>`<div class="sum-row"><span>${esc(prodName(l.product))} <span class="muted">${l.qty} ${esc(uomOf(l.product))} → ${esc(DISP_LABEL[l.disposition]||l.disposition||'—')}</span></span><span class="mono">${l.lpn?esc(l.lpn)+' · '+esc(locName(l.toLoc)):'—'}</span></div>`).join('');
+      root.innerHTML=`
+        <div class="panel" style="margin-bottom:10px"><b>${esc(KIND_LABEL[r.kind]||r.kind)} <span class="mono">${esc(r.id)}</span></b> <span class="badge b-available">closed</span>
+          <div class="muted" style="margin-top:4px">${esc(dbName('clients',r.client))}${r.ref?' · ref '+esc(r.ref):''} · closed ${esc(r.closed||'')}</div></div>
+        <div class="panel" style="margin-bottom:10px">${lines}</div>
+        <button class="btn btn-outline" id="dv-back" style="width:100%">‹ Back to returns</button>`;
+      $('dv-back').onclick=()=>{ S.cur=null; S.tab='done'; S.view='list'; render(); };
+    }
+
+    function render(){
+      flashClear();
+      ({ list:renderList, new:renderNew, addline:renderAddLine, process:renderProcess, done:renderDone, 'done-view':renderDoneView }[S.view] || renderList)();
+    }
+    const q=new URLSearchParams(location.search), deep=q.get('ret');
+    if (deep && DB.returns.find(r=>r.id===deep)) openReturn(deep); else render();
+  })();
+  </script>
+</body>
+</html>

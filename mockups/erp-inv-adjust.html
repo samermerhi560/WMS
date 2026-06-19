@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Adjustments &amp; Corrections — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="inv-adjust" data-erp-title="Inventory Ops"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Inventory Ops › Adjustments &amp; Corrections">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-ok    { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-warn  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-bad   { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .tag.tag-info  { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+
+      .badge.b-pending  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .badge.b-posted   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .badge.b-rejected { border-color:#9a9a9a; background:#eee; color:#555; }
+
+      .mode-pick { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
+      .mode-card { flex:1; min-width:240px; border:1.5px solid var(--line); border-radius:var(--radius);
+        padding:12px 14px; cursor:pointer; background:var(--white); }
+      .mode-card:hover { background:var(--fill); }
+      .mode-card.on { border-color:var(--brand); background:var(--brand-tint); }
+      .mode-card b { display:block; margin-bottom:2px; }
+      .mode-card small { color:var(--ink-soft); }
+
+      .chg { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      .chg .from { color:var(--ink-soft); text-decoration:line-through; }
+      .chg .to   { font-weight:700; color:var(--ink); }
+      .chg .arr  { color:var(--ink-faint); }
+
+      .stockcard { border:1px solid var(--line-soft); border-radius:var(--radius); background:var(--fill);
+        padding:12px 14px; margin-bottom:14px; }
+      .review-box { border:1px solid var(--line-soft); border-radius:var(--radius); background:var(--white);
+        padding:14px 16px; margin-bottom:14px; }
+      .req-note { font-size:12px; color:var(--ink-soft); }
+      .approve-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .approve-bar .right { margin-left:auto; display:flex; gap:8px; }
+      .viewas { display:flex; align-items:center; gap:6px; font-size:11px; text-transform:uppercase;
+        letter-spacing:.04em; color:var(--ink-soft); }
+      .viewas select { width:auto; min-width:140px; text-transform:none; letter-spacing:normal; font-size:13px; }
+      .frz-note { font-size:12.5px; padding:8px 12px; border-radius:var(--radius); margin-top:8px;
+        border:1px solid #c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .mk-note { font-size:12.5px; padding:8px 12px; border-radius:var(--radius);
+        border:1px solid #caa24a; background:#fbf3dd; color:#7a5a07; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Adjustments &amp; Corrections</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts">
+          <label class="viewas" title="Maker-checker demo — switch the signed-in approver">View as
+            <select id="view-as" onchange="setUser(this.value)"></select></label>
+          <button class="btn btn-outline" onclick="openNew('qty')">+ New adjustment</button>
+          <button class="btn btn-primary" onclick="openNew('correct')">+ New correction</button>
+        </div>
+      </div>
+      <p class="sub">Correct stock that was received or handled wrong. A <b>quantity adjustment</b> changes how much is on a
+        plate (damage, loss, found stock); an <b>attribute correction</b> fixes <b>what it is</b> — a wrong lot, expiry, serial,
+        product or owning client keyed at receipt. Both are reason-coded, require <b>supervisor approval</b>, and are written to the audit trail.</p>
+
+      <div class="tabs" id="tabs"></div>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site (operator)</span><select id="f-site"></select></label>
+          <label class="field" id="f-since-wrap"><span>Since date <span class="req">*</span></span><input type="date" id="f-since"></label>
+          <label class="field"><span>Client</span><select id="f-client"></select></label>
+          <label class="field"><span>Type</span><select id="f-kind">
+            <option value="all">All types</option><option value="qty">Quantity adjustment</option><option value="correct">Attribute correction</option>
+          </select></label>
+          <label class="field"><span>Product / LPN / ID</span><input id="f-q" placeholder="Search…"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Status <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>ID</th><th><span class="funnel">▾</span>Date</th>
+          <th><span class="funnel">▾</span>Type</th><th><span class="funnel">▾</span>Product</th>
+          <th><span class="funnel">▾</span>LPN</th><th>Change</th>
+          <th><span class="funnel">▾</span>Reason</th><th><span class="funnel">▾</span>Status</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== CREATE FORM ===================== -->
+    <div id="view-form" style="display:none">
+      <div class="page-head"><h1 id="form-title">New adjustment</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+
+      <div class="mode-pick">
+        <div class="mode-card" id="mode-qty" onclick="setMode('qty')">
+          <b>Quantity adjustment</b><small>Change the quantity on a plate — damage, loss, found stock, count fix.</small></div>
+        <div class="mode-card" id="mode-correct" onclick="setMode('correct')">
+          <b>Attribute correction</b><small>Fix wrong lot / expiry / serial / product / owning client (no qty change).</small></div>
+      </div>
+
+      <div class="panel">
+        <fieldset><legend>Stock plate</legend>
+          <div class="field-row">
+            <label class="field" style="flex:2"><span>Site</span><select id="s-site"></select></label>
+            <label class="field" style="flex:3"><span>Plate (LPN) <span class="req">*</span></span><select id="s-lpn"></select></label>
+          </div>
+          <div class="stockcard" id="stockcard"></div>
+          <div class="frz-note" id="frz-note" style="display:none"></div>
+        </fieldset>
+
+        <!-- qty mode -->
+        <fieldset id="fs-qty"><legend>Quantity change</legend>
+          <div class="field-row">
+            <label class="field"><span>Direction</span><select id="q-dir">
+              <option value="decrease">Decrease (−)</option><option value="increase">Increase (+)</option></select></label>
+            <label class="field"><span>Quantity <span class="req">*</span></span><input id="q-qty" type="number" min="1" value="1"></label>
+            <label class="field"><span>Reason <span class="req">*</span></span><select id="q-reason"></select></label>
+          </div>
+          <div id="q-preview" class="req-note"></div>
+        </fieldset>
+
+        <!-- correct mode -->
+        <fieldset id="fs-correct" style="display:none"><legend>Attribute correction</legend>
+          <p class="req-note">Edit only the field(s) keyed wrong. Unchanged fields are left as-is. Quantity is not affected.</p>
+          <div id="correct-fields"></div>
+          <div class="field-row">
+            <label class="field"><span>Reason <span class="req">*</span></span><select id="c-reason"></select></label>
+          </div>
+        </fieldset>
+
+        <fieldset><legend>Note &amp; evidence</legend>
+          <label class="field"><span>Note (optional)</span><input id="f-note" placeholder="Free text for the audit trail…"></label>
+          <div id="adj-photos" style="margin-top:10px"></div>
+          <div id="adj-notes" style="margin-top:10px"></div>
+        </fieldset>
+
+        <div class="approve-bar">
+          <span class="req-note" id="submit-hint">Submitting raises a <b>pending</b> request for supervisor approval.</span>
+          <span class="right">
+            <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+            <button class="btn btn-primary" id="submit-btn" onclick="submitAdj()">Submit for approval</button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== REVIEW (existing) ===================== -->
+    <div id="view-review" style="display:none">
+      <div class="page-head"><h1 id="rev-title">Adjustment</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Back</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Request</legend><div class="sum-grid" id="rev-summary"></div></fieldset>
+        <div class="review-box" id="rev-change"></div>
+        <div class="approve-bar" id="rev-actions"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-16';
+
+    const SINCE_DEFAULT = '2026-05-17';   // 30 days before mock "today" (2026-06-16) — caps how far back history loads
+    const state = { site:'S-LYON', client:'all', kind:'all', q:'', tab:'pending', since:SINCE_DEFAULT };
+    let mode = 'qty';        // form mode
+    // Large, ever-growing tabs need a mandatory Since date; the Pending tab never does (must always see ALL outstanding).
+    const SINCE_TERMINAL = s => s==='posted' || s==='rejected';
+    function needSince(){ return state.tab!=='pending'; }
+    const FIELD_LABEL = { lot:'Lot / batch', expiry:'Expiry', serial:'Serial', product:'Product', client:'Owning client' };
+
+    function adjBadge(s){ const m={pending:'b-pending',posted:'b-posted',rejected:'b-rejected'};
+      return `<span class="badge ${m[s]||''}">${s}</span>`; }
+
+    /* ============================================================ LIST */
+    function adjList(){
+      return DB.adjustments.filter(a=>{
+        if (a.site!==state.site) return false;
+        if (state.tab!=='all' && a.status!==state.tab) return false;
+        if (needSince() && SINCE_TERMINAL(a.status) && (a.created||'') < state.since) return false;
+        if (state.client!=='all' && a.client!==state.client) return false;
+        if (state.kind!=='all' && a.kind!==state.kind) return false;
+        if (state.q){ const hay=`${a.id} ${a.lpn} ${prodName(a.product)} ${a.reason}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+        return true;
+      }).sort((a,b)=> (b.created||'').localeCompare(a.created||'') || b.id.localeCompare(a.id));
+    }
+    function changeText(a){
+      if (a.kind==='qty'){
+        const sign = a.dir==='increase'?'+':'−';
+        return `<span class="chg"><span class="to">${sign}${a.delta}</span> <span class="arr">·</span> <span class="from">${a.beforeQty}</span> <span class="arr">→</span> <span class="to">${a.afterQty}</span></span>`;
+      }
+      const c = (a.changes||[])[0]; if(!c) return '—';
+      const more = (a.changes||[]).length-1;
+      return `<span class="chg"><span class="tag tag-info">${esc(FIELD_LABEL[c.field]||c.field)}</span> <span class="from">${esc(disp(c.field,c.from))}</span><span class="arr">→</span><span class="to">${esc(disp(c.field,c.to))}</span>${more>0?` <span class="muted">+${more} more</span>`:''}</span>`;
+    }
+    function disp(field,val){ if(val==null||val==='') return '—'; if(field==='product') return prodName(val); if(field==='client') return dbName('clients',val); return val; }
+
+    function renderTabs(){
+      const counts = k => DB.adjustments.filter(a=>a.site===state.site && (k==='all'||a.status===k)).length;
+      const tabs=[['pending','Pending'],['posted','Posted'],['rejected','Rejected'],['all','All']];
+      $('tabs').innerHTML = tabs.map(([k,l])=>`<a href="#" class="${k===state.tab?'active':''}" onclick="setTab('${k}');return false">${l} <span class="muted">(${counts(k)})</span></a>`).join('');
+      $('f-since-wrap').style.display = needSince()?'':'none';
+    }
+    function setTab(k){ state.tab=k; renderTabs(); renderList(); }
+
+    function renderList(){
+      if (needSince() && !state.since){ $('rows').innerHTML=`<tr><td colspan="10" class="muted" style="padding:18px">Set a <b>Since date</b> above to load ${state.tab==='all'?'':state.tab+' '}history (bounded for performance).</td></tr>`; $('list-summary').textContent=''; return; }
+      const list = adjList();
+      $('rows').innerHTML = list.length ? list.map(a=>`<tr>
+        <td class="dots">⋮</td>
+        <td class="mono"><a href="#" onclick="openReview('${a.id}');return false">${a.id}</a></td>
+        <td>${esc(a.created||'—')}</td>
+        <td>${a.kind==='qty'?'<span class="tag tag-warn">Qty</span>':'<span class="tag tag-info">Correction</span>'}</td>
+        <td>${esc(prodName(a.product))}</td>
+        <td class="mono">${esc(a.lpn)}</td>
+        <td>${changeText(a)}</td>
+        <td>${esc(a.reason||'—')}</td>
+        <td>${adjBadge(a.status)}</td>
+        <td>${a.status==='pending'?`<a href="#" onclick="openReview('${a.id}');return false">Review ›</a>`:`<a href="#" onclick="openReview('${a.id}');return false">View</a>`}</td>
+      </tr>`).join('') : `<tr><td colspan="10" class="muted" style="padding:18px">No ${state.tab==='all'?'':state.tab+' '}adjustments at ${dbName('sites',state.site)}.</td></tr>`;
+      const pend = DB.adjustments.filter(a=>a.site===state.site && a.status==='pending').length;
+      $('list-summary').textContent = `${list.length} shown · ${pend} pending approval at ${dbName('sites',state.site)}`;
+    }
+
+    /* ============================================================ CREATE FORM */
+    function openNew(m){ mode=m; show('form'); $('s-site').value=state.site; fillLpns(); setMode(m); }
+    function setMode(m){
+      mode=m;
+      $('mode-qty').classList.toggle('on', m==='qty');
+      $('mode-correct').classList.toggle('on', m==='correct');
+      $('fs-qty').style.display = m==='qty'?'':'none';
+      $('fs-correct').style.display = m==='correct'?'':'none';
+      $('form-title').textContent = m==='qty'?'New quantity adjustment':'New attribute correction';
+      if (m==='qty') fillQtyReasons(); else fillCorrectFields();
+    }
+    function curLpn(){ return lpnById($('s-lpn').value); }
+    function fillLpns(){
+      const site=$('s-site').value;
+      const list = onHandLpns(site);
+      $('s-lpn').innerHTML = list.map(l=>`<option value="${l.id}">${l.id} — ${esc(prodName(l.product))} · ${l.qty} @ ${esc(locName(l.loc))}</option>`).join('');
+      renderStockcard();
+    }
+    function renderStockcard(){
+      const l=curLpn(); if(!l){ $('stockcard').innerHTML='<span class="muted">No stock at this site.</span>'; return; }
+      const p=DB.products.find(x=>x.id===l.product)||{}; const t=p.track||{};
+      const bits=[['LPN',l.id],['Product',prodName(l.product)],['Client',dbName('clients',l.client)],
+        ['Location',locName(l.loc)],['On-hand',`${l.qty} ${esc(p.uom||'')}`],['Status',l.status]];
+      if(t.lot) bits.push(['Lot',l.lot||'—']);
+      if(t.expiry) bits.push(['Expiry',l.expiry||'—']);
+      if(t.serial) bits.push(['Serial',(l.serials&&l.serials[0])||'—']);
+      $('stockcard').innerHTML = `<div class="sum-grid">${bits.map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>`;
+      // optional write-off / correction evidence, keyed to the plate being adjusted (ref = LPN id)
+      $('adj-photos').innerHTML = photoField({ ref:l.id, level:'header', title:'Evidence (optional)' });
+      $('adj-notes').innerHTML = noteField({ ref:l.id, level:'header', title:'Adjustment notes (optional)' });
+      renderFrozenNote();
+      if (mode==='qty'){ fillQtyReasons(); qtyPreview(); } else fillCorrectFields();
+    }
+    // C2 — live freeze note: if the plate's bin is inside an active frozen stock-take, both submit & approve are refused.
+    function renderFrozenNote(){
+      const el=$('frz-note'); const l=curLpn();
+      const fz = l && frozenTakeFor(l.loc);
+      if (fz){ el.innerHTML = `✗ <b>${esc(locName(l.loc))}</b> is inside a frozen physical-inventory take <b>${esc(fz.id)}</b> — adjustments to this plate are blocked until it is posted or abandoned.`; el.style.display='block'; }
+      else el.style.display='none';
+    }
+    function fillQtyReasons(){
+      const dir=$('q-dir').value;
+      $('q-reason').innerHTML = `<option value="">— select —</option>`+reasonsFor('adjust',dir).concat('Other (see note)').map(r=>`<option>${esc(r)}</option>`).join('');
+    }
+    function qtyPreview(){
+      const l=curLpn(); if(!l) return;
+      const dir=$('q-dir').value; const q=Math.max(0,+$('q-qty').value||0);
+      const after = dir==='increase'? l.qty+q : l.qty-q;
+      const bad = dir==='decrease' && q>l.qty;
+      $('q-preview').innerHTML = bad
+        ? `<span class="tag tag-bad">Cannot remove ${q} — only ${l.qty} on-hand</span>`
+        : `New on-hand: <b>${after}</b> ${esc((DB.products.find(x=>x.id===l.product)||{}).uom||'')} <span class="muted">(${l.qty} ${dir==='increase'?'+':'−'} ${q})</span>`;
+    }
+    function fillCorrectFields(){
+      const l=curLpn(); if(!l){ $('correct-fields').innerHTML='<span class="muted">Select a plate.</span>'; return; }
+      const p=DB.products.find(x=>x.id===l.product)||{}; const t=p.track||{};
+      const rows=[];
+      // product (within the same client scope) + owning client are always correctable
+      rows.push(`<label class="field"><span>Product</span><select id="cf-product">${
+        DB.products.filter(x=>x.client===l.client).map(x=>`<option value="${x.id}"${x.id===l.product?' selected':''}>${esc(prodName(x.id))}</option>`).join('')}</select></label>`);
+      rows.push(`<label class="field"><span>Owning client</span><select id="cf-client">${
+        DB.clients.map(c=>`<option value="${c.id}"${c.id===l.client?' selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`);
+      if (t.lot)    rows.push(`<label class="field"><span>Lot / batch</span><input id="cf-lot" value="${esc(l.lot||'')}"></label>`);
+      if (t.expiry) rows.push(`<label class="field"><span>Expiry</span><input id="cf-expiry" type="date" value="${esc(l.expiry||'')}"></label>`);
+      if (t.serial) rows.push(`<label class="field"><span>Serial(s)</span><input id="cf-serial" value="${esc((l.serials&&l.serials[0])||'')}"></label>`);
+      $('correct-fields').innerHTML = `<div class="field-row">${rows.join('')}</div>`;
+      $('c-reason').innerHTML = `<option value="">— select —</option>`+reasonsFor('correct').concat('Other (see note)').map(r=>`<option>${esc(r)}</option>`).join('');
+    }
+
+    function submitAdj(){
+      const l=curLpn(); if(!l){ alert('Select a stock plate.'); return; }
+      // C2 — physical-inventory freeze: refuse a raise against a plate whose bin is in an active frozen take.
+      const fz=frozenTakeFor(l.loc);
+      if (fz){ alert(`Blocked — ${locName(l.loc)} is inside a frozen physical-inventory take (${fz.id}). Adjustments are refused until it is posted or abandoned.`); return; }
+      const note=$('f-note').value.trim();
+      let adj;
+      if (mode==='qty'){
+        const dir=$('q-dir').value; const q=Math.max(0,+$('q-qty').value||0); const reason=$('q-reason').value;
+        if (q<=0){ alert('Enter a quantity.'); return; }
+        if (dir==='decrease' && q>l.qty){ alert(`Cannot remove ${q} — only ${l.qty} on-hand.`); return; }
+        if (!reason){ alert('Select a reason.'); return; }
+        // F3 — orphan-allocation guard: a decrease leaving qty below open reservations would orphan them.
+        if (dir==='decrease'){
+          const res=ordersReserving(l.id); const reserved=res.reduce((s,r)=>s+(r.qty||0),0);
+          const after=l.qty-q;
+          if (reserved>0 && after<reserved){
+            const detail=res.map(r=>`  • ${r.order} (${r.qty})`).join('\n');
+            if (!confirm(`This decrease leaves ${after} on ${l.id}, below the ${reserved} reserved on open order(s):\n\n${detail}\n\nThose allocation(s) would be orphaned and must be re-allocated. Continue?`)) return;
+          }
+        }
+        adj={ id:nextId(), kind:'qty', client:l.client, site:l.site, lpn:l.id, product:l.product,
+          status:'pending', created:TODAY, by:'Samer Merhi', dir, reason, note,
+          beforeQty:l.qty, delta:q, afterQty: dir==='increase'? l.qty+q : l.qty-q };
+      } else {
+        const reason=$('c-reason').value; if(!reason){ alert('Select a reason.'); return; }
+        const changes=[];
+        const np=$('cf-product').value; if(np!==l.product) changes.push({field:'product',from:l.product,to:np});
+        const nc=$('cf-client').value;  if(nc!==l.client)  changes.push({field:'client',from:l.client,to:nc});
+        const elLot=$('cf-lot'); if(elLot && elLot.value.trim()!==(l.lot||'')) changes.push({field:'lot',from:l.lot||'',to:elLot.value.trim()});
+        const elExp=$('cf-expiry'); if(elExp && elExp.value!==(l.expiry||'')) changes.push({field:'expiry',from:l.expiry||'',to:elExp.value});
+        const elSer=$('cf-serial'); if(elSer && elSer.value.trim()!==((l.serials&&l.serials[0])||'')) changes.push({field:'serial',from:(l.serials&&l.serials[0])||'',to:elSer.value.trim()});
+        if (!changes.length){ alert('Change at least one field, or cancel.'); return; }
+        adj={ id:nextId(), kind:'correct', client:l.client, site:l.site, lpn:l.id, product:l.product,
+          status:'pending', created:TODAY, by:'Samer Merhi', reason, note, changes };
+      }
+      DB.adjustments.push(adj);
+      banner(`<b>${adj.id}</b> raised — <b>pending</b> supervisor approval. ${adj.kind==='qty'?'Quantity':'Attribute'} change on ${esc(adj.lpn)}.`);
+      state.tab='pending'; renderTabs(); renderList(); show('list');
+    }
+    function nextId(){ let n=5000; DB.adjustments.forEach(a=>{ const m=/ADJ-(\d+)/.exec(a.id); if(m) n=Math.max(n,+m[1]); }); return 'ADJ-'+(n+1); }
+
+    /* ============================================================ REVIEW + APPROVE */
+    function openReview(id){
+      const a=DB.adjustments.find(x=>x.id===id); if(!a) return;
+      $('rev-title').textContent = `${a.kind==='qty'?'Quantity adjustment':'Attribute correction'} ${a.id}`;
+      $('rev-summary').innerHTML = [
+        ['ID',a.id],['Type',a.kind==='qty'?'Quantity adjustment':'Attribute correction'],
+        ['Product',prodName(a.product)],['Plate',a.lpn],['Client',dbName('clients',a.client)],
+        ['Site',dbName('sites',a.site)],['Raised',a.created],['By',a.by||'—'],
+        ['Reason',a.reason||'—'],['Status',a.status],
+      ].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+
+      let chg;
+      if (a.kind==='qty'){
+        chg = `<b>Quantity ${a.dir}</b><div class="chg" style="margin-top:6px;font-size:15px"><span class="from">${a.beforeQty}</span><span class="arr">→</span><span class="to">${a.afterQty}</span> <span class="muted">(${a.dir==='increase'?'+':'−'}${a.delta})</span></div>`;
+      } else {
+        chg = `<b>Field corrections</b>` + (a.changes||[]).map(c=>`<div class="chg" style="margin-top:6px"><span class="tag tag-info">${esc(FIELD_LABEL[c.field]||c.field)}</span> <span class="from">${esc(disp(c.field,c.from))}</span><span class="arr">→</span><span class="to">${esc(disp(c.field,c.to))}</span></div>`).join('');
+      }
+      if (a.note) chg += `<div class="req-note" style="margin-top:10px">Note: ${esc(a.note)}</div>`;
+      $('rev-change').innerHTML = chg;
+
+      const blockSelf = sameActor(a.by);          // F13 — raiser may not approve their own request
+      $('rev-actions').innerHTML = a.status==='pending'
+        ? (blockSelf?`<span class="mk-note">Maker-checker — <b>${esc(a.by)}</b> raised this; a different user must approve. Switch the “View as” user.</span>`
+                   :`<span class="req-note">This change is <b>not yet applied</b>. Approving posts it to stock and the audit trail.</span>`)
+           +`<span class="right">
+             <button class="btn btn-outline" onclick="reject('${a.id}')">Reject</button>
+             <button class="btn btn-primary" onclick="approve('${a.id}')"${blockSelf?' disabled':''}>Approve &amp; post</button></span>`
+        : `<span class="req-note">${a.status==='posted'?`Posted ${esc(a.posted||a.created)} — applied to stock and audit trail.`:'Rejected — no change applied.'}</span>`;
+      show('review');
+    }
+    function approve(id){
+      const a=DB.adjustments.find(x=>x.id===id); if(!a||a.status!=='pending') return;
+      const l=lpnById(a.lpn);
+      // F13 — separation of duties: the raiser cannot approve their own request.
+      if (sameActor(a.by)){ alert(`Maker-checker — needs a different user to approve.\n${a.id} was raised by ${a.by}. Switch the "View as" user to approve.`); return; }
+      // C2 — physical-inventory freeze: refuse posting against a plate whose bin is in an active frozen take.
+      if (l){ const fz=frozenTakeFor(l.loc);
+        if (fz){ alert(`Blocked — ${locName(l.loc)} is inside a frozen physical-inventory take (${fz.id}). Posting is refused until it is posted or abandoned.`); return; } }
+      if (a.kind==='qty' && l){
+        l.qty = a.afterQty;
+        logTxn({ type:'adjust', lpn:l.id, product:l.product, qty:(a.dir==='increase'?a.delta:-a.delta), site:l.site,
+          user:'Benjamin Felix', ref:a.id, note:`Qty ${a.beforeQty}→${a.afterQty} · ${a.reason}` });
+      } else if (l){
+        (a.changes||[]).forEach(c=>{ if(c.field==='serial'){ l.serials=[c.to]; } else { l[c.field]=c.to; } });
+        logTxn({ type:'correct', lpn:l.id, product:l.product, qty:l.qty, site:l.site,
+          user:'Benjamin Felix', ref:a.id, note:(a.changes||[]).map(c=>`${c.field}: ${c.from||'—'}→${c.to||'—'}`).join(' · ')+` · ${a.reason}` });
+      }
+      a.status='posted'; a.posted=TODAY;
+      banner(`<b>${a.id}</b> approved &amp; posted — applied to ${esc(a.lpn)} and logged to audit trail.`);
+      renderTabs(); renderList(); show('list');
+    }
+    function reject(id){
+      const a=DB.adjustments.find(x=>x.id===id); if(!a||a.status!=='pending') return;
+      a.status='rejected';
+      banner(`<b>${a.id}</b> rejected — no change applied to stock.`);
+      renderTabs(); renderList(); show('list');
+    }
+
+    /* ============================================================ view helpers */
+    function show(v){ ['list','form','review'].forEach(x=>$('view-'+x).style.display = x===v?'':'none'); window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ============================================================ init */
+    // F13 — "View as" approver switch (maker-checker demo). Populated from DB.users; defaults to the current user.
+    function fillViewAs(){
+      const cur=currentUser(); const names=DB.users.map(u=>u.name);
+      const opts = names.includes(cur) ? names : [cur].concat(names);
+      $('view-as').innerHTML = opts.map(n=>`<option value="${esc(n)}"${n===cur?' selected':''}>${esc(n)}</option>`).join('');
+    }
+    function setUser(name){ setCurrentUser(name); fillViewAs(); renderList(); }
+    fillViewAs();
+    $('f-site').innerHTML   = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('s-site').innerHTML   = $('f-site').innerHTML;
+    $('f-client').innerHTML = `<option value="all">All clients</option>`+DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; renderTabs(); renderList(); });
+    $('f-since').value = SINCE_DEFAULT;
+    $('f-since').addEventListener('change',  e=>{ state.since=e.target.value; renderList(); });
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; renderList(); });
+    $('f-kind').addEventListener('change',   e=>{ state.kind=e.target.value; renderList(); });
+    $('f-q').addEventListener('input',       e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    $('s-site').addEventListener('change',   ()=>{ fillLpns(); });
+    $('s-lpn').addEventListener('change',    renderStockcard);
+    $('q-dir').addEventListener('change',    ()=>{ fillQtyReasons(); qtyPreview(); });
+    $('q-qty').addEventListener('input',     qtyPreview);
+
+    renderTabs(); renderList();
+
+    /* ---- deep-link hand-off: ?lpn=<id> opens the create form pre-loaded on that plate
+            (from the Stock Status ⋮ menu — mirrors the ?asn=/?out= pattern) ---- */
+    (function(){
+      const lpn = new URLSearchParams(location.search).get('lpn');
+      if (!lpn) return;
+      const l = lpnById(lpn);
+      if (!l || (l.qty||0)<=0) return;                  // only on-hand plates are adjustable here
+      state.site = l.site; $('f-site').value = l.site; if($('f-site')._ssSync)$('f-site')._ssSync();
+      renderTabs(); renderList();
+      openNew('qty');                                   // sets s-site=state.site, fills the LPN list
+      if($('s-site')._ssSync)$('s-site')._ssSync();
+      $('s-lpn').value = lpn; if($('s-lpn')._ssSync)$('s-lpn')._ssSync();
+      renderStockcard();
+    })();
+  </script>
+</body></html>

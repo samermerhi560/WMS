@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Categories — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-categories" data-erp-title="Categories"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Categories">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .subchips { display:flex; flex-wrap:wrap; gap:6px; }
+      .subchip { font-size:11.5px; padding:2px 9px; border-radius:12px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); }
+      .sub-edit { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+      .sub-edit input { max-width:340px; }
+      .sub-edit .rm { color:var(--bad); cursor:pointer; font-weight:600; }
+      .add-sub { color:var(--brand-text); cursor:pointer; font-weight:600; font-size:12.5px; }
+      .cnt { color:var(--ink-faint); font-size:12px; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="cat-banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Categories</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts">
+          <button class="btn btn-primary" onclick="openEdit(null)">+ New category</button>
+          <button class="btn" disabled>Export</button>
+        </div></div>
+      <p class="sub">A <b>cross-client</b> product taxonomy (two levels: <b>category → sub-category</b>), shared by every client like Units of Measure. Categories classify products and drive <b>zone affinity</b> for directed putaway, plus reporting. They belong to no client.</p>
+
+      <div class="panel" style="padding:0">
+        <table class="wf"><thead><tr>
+          <th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>Category</th>
+          <th><span class="funnel">▾</span>Sub-categories</th>
+          <th><span class="funnel">▾</span>Products</th>
+          <th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== EDIT ===================== -->
+    <div id="view-edit" style="display:none">
+      <div class="page-head"><h1 id="e-title">New category</h1>
+        <div class="acts">
+          <button class="btn btn-primary" onclick="saveCategory()">Save category</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+        </div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to categories</a></div>
+
+      <div class="panel">
+        <div class="row">
+          <label class="field col"><span>Category name <span class="req">*</span></span><input id="e-name" placeholder="e.g. Food &amp; Beverage"></label>
+          <label class="field col"><span>Scope</span><input value="Global — all clients" readonly></label>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 style="margin-top:0">Sub-categories</h3>
+        <p class="muted" style="margin-top:0;font-size:12px">Optional second level. A product picks one category and (optionally) one of its sub-categories; zones can prefer either level.</p>
+        <div id="subs"></div>
+        <a class="add-sub" onclick="addSub()">+ Add sub-category</a>
+      </div>
+
+      <div class="panel">
+        <div id="e-notes" style="margin:10px 0"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+    let editId = null;     // category id being edited, or null for new
+    let editSubs = [];     // [{id, name}]
+
+    function prodCount(catId){ return DB.products.filter(p=>p.category===catId).length; }
+    function subProdCount(subId){ return DB.products.filter(p=>p.subCategory===subId).length; }
+
+    /* ---- list ---- */
+    function renderList(){
+      $('rows').innerHTML = DB.categories.length ? DB.categories.map(c => {
+        const chips = (c.subs||[]).map(s => `<span class="subchip">${esc(s.name)}<span class="cnt"> · ${subProdCount(s.id)}</span></span>`).join('');
+        return `<tr>
+          <td class="dots">⋮</td>
+          <td><b>${esc(c.name)}</b><br><span class="muted mono" style="font-size:11px">${esc(c.id)}</span></td>
+          <td><div class="subchips">${chips || '<span class="muted">—</span>'}</div></td>
+          <td>${prodCount(c.id)}</td>
+          <td><a href="#" onclick="openEdit('${c.id}');return false">Edit ›</a></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="5" class="muted" style="padding:18px">No categories yet.</td></tr>`;
+      const subTotal = DB.categories.reduce((s,c)=>s+(c.subs||[]).length,0);
+      $('list-summary').textContent = `${DB.categories.length} categor(ies) · ${subTotal} sub-categor(ies)`;
+    }
+
+    /* ---- edit ---- */
+    function openEdit(id){
+      editId = id;
+      if (id){ const c = DB.categories.find(x=>x.id===id); $('e-title').textContent = `Edit — ${c.name}`; $('e-name').value = c.name; editSubs = (c.subs||[]).map(s=>({...s})); }
+      else { $('e-title').textContent = 'New category'; $('e-name').value = ''; editSubs = []; }
+      $('e-notes').innerHTML = noteField({ ref: id || 'CAT-DRAFT', level:'header', title:'Notes (optional)' });
+      renderSubs(); show('edit');
+    }
+    function renderSubs(){
+      $('subs').innerHTML = editSubs.length ? editSubs.map((s,i) =>
+        `<div class="sub-edit">
+          <input value="${esc(s.name)}" placeholder="Sub-category name" oninput="editSubs[${i}].name=this.value">
+          <span class="cnt">${subProdCount(s.id)} product(s)</span>
+          <span class="rm" onclick="rmSub(${i})">remove</span>
+        </div>`).join('') : `<p class="muted" style="margin:0 0 8px">No sub-categories yet.</p>`;
+    }
+    function addSub(){ editSubs.push({ id:'SUB-'+Date.now().toString().slice(-5), name:'' }); renderSubs(); }
+    function rmSub(i){ editSubs.splice(i,1); renderSubs(); }
+
+    function saveCategory(){
+      const name = $('e-name').value.trim(); if (!name){ $('e-name').focus(); return; }
+      const subs = editSubs.filter(s=>s.name.trim()).map(s=>({ id:s.id, name:s.name.trim() }));
+      if (editId){ const c = DB.categories.find(x=>x.id===editId); c.name = name; c.subs = subs; }
+      else { DB.categories.push({ id:'CAT-'+Date.now().toString().slice(-5), name, subs }); }
+      $('cat-banner').innerHTML = `Saved <b>${esc(name)}</b> (${subs.length} sub-categor${subs.length===1?'y':'ies'}). <span class="muted">Mock — session only.</span>`;
+      $('cat-banner').style.display = 'block';
+      renderList(); show('list');
+    }
+
+    /* ---- view toggle ---- */
+    function show(v){
+      $('view-list').style.display = v==='list' ? '' : 'none';
+      $('view-edit').style.display = v==='edit' ? '' : 'none';
+      window.scrollTo(0,0);
+    }
+
+    renderList();
+  </script>
+</body></html>

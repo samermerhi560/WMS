@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transaction History — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-txns" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Transaction History">
+  <div id="page-content">
+    <style>
+      .tt { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tt.t-in   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tt.t-out  { border-color:#9a9a9a; background:#eee;    color:#444; }
+      .tt.t-move { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tt.t-adj  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .print-only.phead { margin-bottom:10px; }
+    </style>
+
+    <div class="print-only phead"><h1>Transaction History / Stock Ledger</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Transaction History <span class="muted" style="font-size:14px;font-weight:400">/ Stock Ledger</span></h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">The audit / reconciliation backbone — every stock mutation in chronological order, from the
+      <code>DB.txns[]</code> audit log. Each operation across the system appends a row here.</p>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Filters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>From date</span><input type="date" id="f-since"></label>
+        <label class="field"><span>To date</span><input type="date" id="f-until"></label>
+        <label class="field"><span>Type</span><select id="f-type"></select></label>
+        <label class="field"><span>Site</span><select id="f-site"></select></label>
+        <label class="field"><span>Client</span><select id="f-client"></select></label>
+        <label class="field"><span>Product</span><select id="f-product"></select></label>
+        <label class="field"><span>LPN / ref</span><input id="f-q" placeholder="Search…"></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="table-toolbar no-print">
+      <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+      <button class="btn btn-sm btn-outline" onclick="window.print()">Print</button>
+      <button class="btn btn-sm" disabled>Columns</button>
+      <span class="chip">↓ Newest first <span class="x">✕</span></span>
+      <span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th><span class="funnel">▾</span>When</th>
+        <th><span class="funnel">▾</span>Event</th>
+        <th><span class="funnel">▾</span>LPN</th>
+        <th><span class="funnel">▾</span>Product</th>
+        <th class="num">Qty</th>
+        <th>From → To</th>
+        <th>Site</th>
+        <th>User</th>
+        <th>Ref / note</th>
+        <th>Notes</th>
+      </tr></thead><tbody id="rows"></tbody></table>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TYPES = ['receive','putaway','move','transfer-ship','transfer-receive','adjust','correct','count','status','inspect','repack','return','dispatch'];
+    const IN_T  = ['receive','transfer-receive','return'];
+    const OUT_T = ['dispatch','transfer-ship'];
+    const MOVE_T= ['move','putaway'];
+    const ADJ_T = ['adjust','correct','count','repack','status','inspect'];
+    function typeClass(t){ return IN_T.includes(t)?'t-in':OUT_T.includes(t)?'t-out':MOVE_T.includes(t)?'t-move':'t-adj'; }
+    function clientOf(prod){ const p=DB.products.find(x=>x.id===prod); return p?p.client:''; }
+    const dateOf = ts => String(ts||'').slice(0,10);
+
+    // default window: last 30 days vs mock today
+    const since0 = '2026-05-18';
+    const state = { since:since0, until:'', type:'all', site:'all', client:'all', product:'all', q:'' };
+
+    function rowsData(){
+      return (DB.txns||[]).filter(t=>{
+        const d = dateOf(t.ts);
+        if (state.since && d < state.since) return false;
+        if (state.until && d > state.until) return false;
+        if (state.type!=='all'    && t.type!==state.type)        return false;
+        if (state.site!=='all'    && t.site!==state.site)        return false;
+        if (state.client!=='all'  && clientOf(t.product)!==state.client) return false;
+        if (state.product!=='all' && t.product!==state.product)  return false;
+        if (state.q){
+          const hay = `${t.lpn||''} ${t.ref||''} ${t.note||''}`.toLowerCase();
+          if (!hay.includes(state.q)) return false;
+        }
+        return true;
+      }).sort((a,b)=>String(b.ts).localeCompare(String(a.ts)));
+    }
+
+    function render(){
+      const list = rowsData();
+      $('rows').innerHTML = list.length ? list.map(t=>`
+        <tr>
+          <td class="mono">${esc(t.ts)}</td>
+          <td><span class="tt ${typeClass(t.type)}">${esc(t.type)}</span></td>
+          <td class="mono">${esc(t.lpn||'—')}</td>
+          <td>${t.product?esc(prodName(t.product)):'<span class="muted">—</span>'}</td>
+          <td class="num">${t.qty==null?'':t.qty}</td>
+          <td class="mono">${esc(t.from?locName(t.from):'—')} → ${esc(t.to?locName(t.to):'—')}</td>
+          <td>${esc(dbName('sites',t.site)||'—')}</td>
+          <td>${esc(t.user||'')}</td>
+          <td>${esc(t.ref||'')}${t.note?` <span class="muted">· ${esc(t.note)}</span>`:''}</td>
+          <td>${t.note || noteFor(t.id) || '<span class="muted">—</span>'}</td>
+        </tr>`).join('')
+        : `<tr><td colspan="10" class="muted" style="padding:18px">No transactions match the filters in this period.</td></tr>`;
+
+      const ins = list.filter(t=>IN_T.includes(t.type)).length;
+      const outs = list.filter(t=>OUT_T.includes(t.type)).length;
+      const adjs = list.filter(t=>ADJ_T.includes(t.type)).length;
+      const lpnN = new Set(list.map(t=>t.lpn).filter(Boolean)).size;
+      $('kpis').innerHTML = `
+        <div class="kpi"><span class="k-label">Transactions</span><span class="k-val">${list.length}</span><span class="k-sub">${lpnN} distinct LPN(s)</span></div>
+        <div class="kpi k-good"><span class="k-label">Inbound events</span><span class="k-val">${ins}</span><span class="k-sub">receive / return / xfer-in</span></div>
+        <div class="kpi"><span class="k-label">Outbound events</span><span class="k-val">${outs}</span><span class="k-sub">dispatch / xfer-out</span></div>
+        <div class="kpi k-warn"><span class="k-label">Adjustments</span><span class="k-val">${adjs}</span><span class="k-sub">adjust / count / status…</span></div>`;
+      $('summary').textContent = `${list.length} event(s) ${state.since?`since ${state.since}`:''}`;
+      $('p-filters').textContent = `${state.since||'—'} → ${state.until||WMS_TODAY}  ·  Type: ${state.type}  ·  Site: ${state.site==='all'?'All':dbName('sites',state.site)}  ·  Client: ${state.client==='all'?'All':dbName('clients',state.client)}`;
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-since').value = state.since;
+    $('f-type').innerHTML    = `<option value="all">All types</option>` + TYPES.map(t=>`<option value="${t}">${t}</option>`).join('');
+    $('f-site').innerHTML    = `<option value="all">All sites</option>` + DB.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('f-client').innerHTML  = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-product').innerHTML = `<option value="all">All products</option>` + DB.products.map(p=>`<option value="${p.id}">${esc(prodName(p.id))}</option>`).join('');
+    $('f-since').addEventListener('change',  e=>{ state.since=e.target.value; render(); });
+    $('f-until').addEventListener('change',  e=>{ state.until=e.target.value; render(); });
+    $('f-type').addEventListener('change',   e=>{ state.type=e.target.value; render(); });
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; render(); });
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; render(); });
+    $('f-product').addEventListener('change',e=>{ state.product=e.target.value; render(); });
+    $('f-q').addEventListener('input',       e=>{ state.q=e.target.value.trim().toLowerCase(); render(); });
+    render();
+  </script>
+</body></html>

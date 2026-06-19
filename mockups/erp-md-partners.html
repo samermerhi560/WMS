@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Suppliers &amp; Carriers — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-partners" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Suppliers &amp; Carriers">
+  <div id="page-content">
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+      <div class="page-head"><h1 id="list-title">Suppliers &amp; Carriers</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn btn-outline" id="create-btn" onclick="openCreate()">Create supplier</button>
+          <button class="btn" disabled>Export</button></div></div>
+      <p class="sub">Global trading-partner master (shared across clients). <b>Suppliers</b> are the source of inbound
+        goods — referenced on an ASN header. <b>Carriers</b> physically move stock out — referenced on dispatch and
+        the delivery note.</p>
+
+      <div class="tabs" id="tabs"></div>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Name</span><input id="f-q" placeholder="Search…"></label>
+          <label class="field"><span>Status</span><select id="f-status"><option value="all">Any</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead id="thead"></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== EDIT / CREATE ===================== -->
+    <div id="view-edit" style="display:none">
+      <div class="page-head"><h1 id="edit-title">Edit</h1>
+        <div class="acts"><button class="btn btn-primary" onclick="saveRec()">Save</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel"><div id="edit-form"></div></div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const state = { tab:'suppliers', q:'', status:'all' };
+    let editing = null;   // { kind, id|null }
+
+    const KIND = {
+      suppliers: { coll:'suppliers', label:'supplier', title:'Suppliers',
+        cols:[['name','Name'],['contact','Contact'],['email','Email'],['phone','Phone'],['country','Country']] },
+      carriers:  { coll:'carriers',  label:'carrier',  title:'Carriers',
+        cols:[['name','Name'],['scac','SCAC'],['mode','Mode'],['contact','Contact'],['phone','Phone']] },
+    };
+
+    /* ---------- tabs + list ---------- */
+    function renderTabs(){
+      $('tabs').innerHTML = Object.keys(KIND).map(k=>{
+        const n = (DB[KIND[k].coll]||[]).length;
+        return `<a href="#" class="${k===state.tab?'active':''}" onclick="setTab('${k}');return false">${KIND[k].title} <span class="muted">(${n})</span></a>`;
+      }).join('');
+      $('create-btn').textContent = 'Create ' + KIND[state.tab].label;
+      $('list-title').textContent = KIND[state.tab].title;
+    }
+    function setTab(k){ state.tab=k; renderTabs(); renderList(); }
+    function matches(r){
+      if (state.status!=='all' && (r.status||'active')!==state.status) return false;
+      if (state.q){ const hay=`${r.name} ${r.contact||''} ${r.country||''} ${r.scac||''}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+      return true;
+    }
+    function renderList(){
+      const K = KIND[state.tab], list = (DB[K.coll]||[]).filter(matches);
+      $('thead').innerHTML = `<tr><th style="width:28px">⚙</th>`+
+        K.cols.map(c=>`<th><span class="funnel">▾</span>${c[1]}</th>`).join('')+`<th>Status</th></tr>`;
+      $('rows').innerHTML = list.length ? list.map(r=>`<tr><td class="dots">⋮</td>`+
+        K.cols.map((c,i)=> i===0
+          ? `<td><a href="#" onclick="openEdit('${state.tab}','${r.id}');return false">${esc(r[c[0]]||'—')}</a></td>`
+          : `<td class="${c[0]==='email'||c[0]==='phone'?'muted':''}">${esc(r[c[0]]||'—')}</td>`).join('')+
+        `<td><span class="badge ${ (r.status||'active')==='active'?'b-available':''}">${esc(r.status||'active')}</span></td></tr>`).join('')
+        : `<tr><td colspan="${K.cols.length+2}" class="muted" style="padding:18px">No ${K.label}s.</td></tr>`;
+      $('list-summary').textContent = `${list.length} ${K.label}(s)`;
+    }
+
+    /* ---------- edit / create ---------- */
+    const FIELDS = {
+      suppliers:[['name','Supplier name',1],['contact','Primary contact',0],['email','Email',0],['phone','Phone',0],['country','Country',0]],
+      carriers: [['name','Carrier name',1],['scac','SCAC / code',0],['mode','Service / mode',0],['contact','Contact',0],['phone','Phone',0]],
+    };
+    function formHtml(kind, rec){
+      const rows = FIELDS[kind].map(([k,label,req])=>
+        `<label class="field"><span>${label}${req?' <span class="req">*</span>':''}</span><input id="e-${k}" value="${esc(rec[k]||'')}"></label>`);
+      // chunk into rows of 3
+      let html = '<fieldset><legend>'+KIND[kind].label.replace(/^./,c=>c.toUpperCase())+' details</legend>';
+      for (let i=0;i<rows.length;i+=3) html += '<div class="field-row">'+rows.slice(i,i+3).join('')+'</div>';
+      html += `<div class="field-row"><label class="field"><span>Status</span>
+        <select id="e-status"><option ${rec.status!=='inactive'?'selected':''}>active</option><option ${rec.status==='inactive'?'selected':''}>inactive</option></select></label></div>`;
+      html += '</fieldset>';
+      const noteRef = rec.id || (kind==='suppliers' ? 'SUP-DRAFT' : 'CAR-DRAFT');
+      html += `<div id="e-notes" style="margin:10px 0">${noteField({ ref:noteRef, level:'header', title:'Notes (optional)' })}</div>`;
+      if (kind==='suppliers') html += `<p class="wf-note muted">Suppliers appear in the <b>Supplier</b> picker on the ASN screen (Goods Reception).</p>`;
+      else html += `<p class="wf-note muted">Carriers appear in the <b>Carrier</b> picker at Dispatch / Express Fulfil and print on the delivery note.</p>`;
+      return html;
+    }
+    function openEdit(kind, id){
+      const rec = (DB[KIND[kind].coll]||[]).find(x=>x.id===id) || {};
+      editing = { kind, id };
+      $('edit-title').textContent = `Edit ${KIND[kind].label} — ${rec.name||id}`;
+      $('edit-form').innerHTML = formHtml(kind, rec);
+      show('edit');
+    }
+    function openCreate(){
+      const kind = state.tab;
+      editing = { kind, id:null };
+      $('edit-title').textContent = `New ${KIND[kind].label}`;
+      $('edit-form').innerHTML = formHtml(kind, {});
+      show('edit');
+    }
+    function saveRec(){
+      const name = ($('e-name').value||'').trim();
+      if (!name){ alert('Name is required.'); return; }
+      banner(`<b>${esc(name)}</b> saved as a ${KIND[editing.kind].label}.`);
+      show('list'); renderList();
+    }
+
+    /* ---------- shared ---------- */
+    function show(v){ $('view-list').style.display=v==='list'?'':'none'; $('view-edit').style.display=v==='edit'?'':'none'; window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ---------- init ---------- */
+    $('f-q').addEventListener('input',e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    $('f-status').addEventListener('change',e=>{ state.status=e.target.value; renderList(); });
+    renderTabs(); renderList();
+  </script>
+</body></html>

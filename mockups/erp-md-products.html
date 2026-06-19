@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Products — WMS</title>
+  <link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-products"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Products">
+  <div id="page-content">
+
+    <style>
+      .pref-row { display:grid; grid-template-columns:170px 210px 1fr; gap:14px; align-items:end;
+        padding:10px 0; border-bottom:1px solid var(--line-soft); }
+      .pref-row:last-child { border-bottom:0; }
+      .pref-site { font-weight:600; padding-bottom:9px; }
+    </style>
+
+    <!-- LIST VIEW (mirrors the ERP's document-list pattern) -->
+    <div id="view-list">
+      <div class="page-head">
+        <h1>Products</h1>
+        <div class="acts">
+          <button class="btn btn-outline" onclick="show('edit')">Create</button>
+          <a class="btn btn-outline" href="erp-md-import.html">Import CSV</a>
+          <button class="btn" disabled>Export</button>
+          <button class="btn" disabled>Archive</button>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <a href="#" class="active" onclick="return false">All</a>
+        <a href="#" onclick="return false">Lot/Expiry tracked</a>
+        <a href="#" onclick="return false">Serial tracked</a>
+        <a href="#" onclick="return false">Archived</a>
+      </div>
+
+      <div class="panel">
+        <div class="filter-head">
+          <span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span>
+        </div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Client</span>
+            <select><option>All clients</option><option>ACME Foods Ltd</option><option>Globex Pharma</option></select></label>
+          <label class="field"><span>SKU</span><input placeholder=""></label>
+          <label class="field"><span>Name</span><input placeholder=""></label>
+          <label class="field"><span>Barcode</span><input placeholder=""></label>
+          <label class="field"><span>Hazmat class</span><input placeholder=""></label>
+          <label class="field"><span>Storage temp</span>
+            <select><option>Any</option><option>Ambient</option><option>Cold-chain</option></select></label>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button>
+        <button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button>
+        <button class="btn btn-sm" disabled>Reset selected</button>
+        <span class="chip">↑ Client <span class="x">✕</span></span>
+        <span class="refresh">⟳</span>
+      </div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf">
+          <thead><tr>
+            <th style="width:30px"><input type="checkbox" style="width:auto"></th>
+            <th style="width:28px">⚙</th>
+            <th><span class="funnel">▾</span>SKU</th>
+            <th><span class="funnel">▾</span>Name</th>
+            <th><span class="funnel">▾</span>UoM</th>
+            <th><span class="funnel">▾</span>Tracking</th>
+            <th><span class="funnel">▾</span>Barcode</th>
+            <th><span class="funnel">▾</span>Category</th>
+            <th><span class="funnel">▾</span>Storage</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- EDIT VIEW (barcodes + packaging folded in as tabs) -->
+    <div id="view-edit" style="display:none">
+      <div class="page-head">
+        <h1>Edit product</h1>
+        <div class="acts">
+          <button class="btn btn-primary">Save product</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+        </div>
+      </div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+
+      <div class="tabs">
+        <a href="#" class="active" onclick="tab(this,'t-details');return false">Details</a>
+        <a href="#" onclick="tab(this,'t-storage');return false">Storage / slotting</a>
+        <a href="#" onclick="tab(this,'t-tracking');return false">Tracking</a>
+        <a href="#" onclick="tab(this,'t-packaging');return false">UoM &amp; Packaging</a>
+        <a href="#" onclick="tab(this,'t-barcodes');return false">Barcodes</a>
+      </div>
+
+      <div class="panel" id="t-details">
+        <div class="field-row">
+          <label class="field"><span>Client <span class="req">*</span></span><select><option>ACME Foods Ltd</option><option>Globex Pharma</option></select></label>
+          <label class="field"><span>SKU (unique per client) <span class="req">*</span></span><input value="OLIVE-500"></label>
+        </div>
+        <label class="field"><span>Product name <span class="req">*</span></span><input value="Olive Oil 500ml"></label>
+        <fieldset><legend>Physical attributes</legend>
+          <div class="field-row">
+            <label class="field"><span>Weight (kg) — base unit</span><input id="e-weight" value="0.55"></label>
+            <label class="field"><span>Dimensions (cm)</span><input value="7 × 7 × 24"></label>
+            <label class="field"><span>Hazmat class</span><input placeholder="none"></label>
+            <label class="field"><span>Temp / storage</span><input value="Ambient"></label>
+          </div>
+          <p class="wf-note muted" style="margin:4px 0 0">Base-unit weight feeds putaway capacity (LPN weight = qty × this).</p>
+        </fieldset>
+        <div id="e-notes" style="margin:10px 0"></div>
+      </div>
+
+      <div class="panel" id="t-storage" style="display:none">
+        <fieldset><legend>Classification</legend>
+          <p class="wf-note muted" style="margin-top:0">Cross-client taxonomy (managed in <a href="erp-md-categories.html">Categories</a>). Drives area affinity for directed putaway and reporting.</p>
+          <div class="field-row">
+            <label class="field"><span>Category</span><select id="e-cat" onchange="onCat()"></select></label>
+            <label class="field"><span>Sub-category</span><select id="e-sub"></select></label>
+          </div>
+        </fieldset>
+
+        <fieldset><legend>Preferred storage (optional)</legend>
+          <p class="wf-note muted" style="margin-top:0">A home location <b>per operating site</b> (pre-filtered to this client's sites). Putaway offers it first — a specific <b>location</b> (fixed) or a <b>storage area</b> (any open bin in it). Leave as "No preference" to rely on consolidate/category rules.</p>
+          <div id="pref-rows"></div>
+        </fieldset>
+      </div>
+
+      <div class="panel" id="t-tracking" style="display:none">
+        <p class="muted">Lot + expiry default ON; <b>serial defaults OFF</b> — enable it only for serialised goods. (Expiry ⇒ lot.)</p>
+        <label class="field"><input type="checkbox" checked style="width:auto"> Lot / batch tracked</label>
+        <label class="field"><input type="checkbox" checked style="width:auto"> Expiry tracked</label>
+        <label class="field"><input type="checkbox" style="width:auto"> Serial tracked</label>
+      </div>
+
+      <div class="panel" id="t-packaging" style="display:none">
+        <p class="muted">This product's packaging hierarchy — levels are built from the <a href="erp-md-uom.html">global units</a>,
+          optionally started from a shared <b>template</b> (defined once in Master&nbsp;Data), then tuned here.
+          <b>Factor → base</b> is computed automatically; per-level barcodes feed the <b>Barcodes</b> tab.</p>
+        <div class="field-row" style="max-width:580px">
+          <label class="field"><span>Base unit (from product UoM — locked)</span><input id="pk-base" readonly></label>
+          <label class="field"><span>Start from template (clones &amp; replaces)</span><select id="pk-template" onchange="cloneTemplate()"></select></label>
+        </div>
+        <table class="wf">
+          <thead><tr><th style="width:28px">#</th><th>Pack level</th><th>UoM</th><th>Qty × defined-against</th><th>Factor → base</th><th>Barcode</th><th></th></tr></thead>
+          <tbody id="pk-rows"></tbody>
+        </table>
+        <div class="spacer"></div><button class="btn btn-sm btn-outline" onclick="openLevel()">Add level</button>
+        <p class="wf-note muted" style="margin-top:8px">“Defined against” = the level a pack contains — the base unit (independent pack) or a lower level (true nesting, e.g. dozen = 2 × six-pack). Editing a level recomputes every factor that depends on it.</p>
+      </div>
+
+      <div class="panel" id="t-barcodes" style="display:none">
+        <p class="muted">Barcodes per item and per packaging level (EAN-13 retail / GS1-128 logistics) — folded in here, not a separate menu.
+          The scannable symbol is rendered live (Code 128 in the mock; EAN-13 retail in the build). Lot / expiry are encoded onto the <b>LPN</b> label at receipt (GS1-128 AIs), not on the product master.</p>
+        <table class="wf">
+          <thead><tr><th>Type</th><th>Level</th><th>Value</th><th>Barcode</th><th class="num">Per base</th><th></th><th></th></tr></thead>
+          <tbody id="bc-rows"></tbody>
+        </table>
+        <div class="spacer"></div>
+        <button class="btn btn-sm btn-outline" onclick="openLevel()">Add barcode (on a level)</button>
+        <button class="btn btn-sm btn-outline" onclick="printAllProductLabels()">Print all labels</button>
+      </div>
+    </div>
+
+    <!-- ADD / EDIT PACK LEVEL MODAL (inside #page-content so the shell keeps it) -->
+    <div id="m-plevel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:60;align-items:center;justify-content:center">
+      <div style="background:#fff;border-radius:6px;max-width:480px;width:92%;padding:18px;box-shadow:0 12px 44px rgba(0,0,0,.25)">
+        <h3 id="pl-title" style="margin-top:0">Add pack level</h3>
+        <label class="field"><span>Pack level name <span class="req">*</span></span>
+          <input id="pl-name" list="pl-suggest" placeholder="e.g. Carton">
+          <datalist id="pl-suggest">
+            <option>Six-pack</option><option>Inner pack</option><option>Box of 6</option>
+            <option>Box of 12 (dozen)</option><option>Box of 24</option><option>Carton</option>
+            <option>Case</option><option>Tray</option><option>Layer</option><option>Pallet</option>
+          </datalist></label>
+        <label class="field"><span>UoM <span class="req">*</span></span><select id="pl-uom" data-no-ss></select></label>
+        <div class="field-row">
+          <label class="field"><span>Defined against <span class="req">*</span></span><select id="pl-basis" data-no-ss onchange="levelHint()"></select></label>
+          <label class="field"><span>Qty</span><input id="pl-qty" type="number" value="6" min="1" oninput="levelHint()"></label>
+        </div>
+        <p class="wf-note muted" id="pl-hint" style="margin-top:-6px"></p>
+        <label class="field"><span>Barcode (optional — this product's own GTIN)</span>
+          <input id="pl-barcode" placeholder="EAN / GS1 printed on the unit"></label>
+        <div class="btn-row" style="margin:-6px 0 10px;align-items:center">
+          <button type="button" class="btn btn-sm btn-outline" onclick="genInternalBarcode()">Generate internal</button>
+          <span class="wf-note muted" id="pl-bc-note">Type the GTIN printed on the unit. For unbarcoded / repacked goods, generate an internal code (GS1 restricted-use prefix&nbsp;20).</span>
+        </div>
+        <div class="btn-row" style="justify-content:flex-end">
+          <button class="btn btn-outline" onclick="closeLevel()">Cancel</button>
+          <button class="btn btn-primary" onclick="saveLevel()">Save level</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/barcode.js"></script>
+  <script src="assets/erp-shell.js"></script>
+  <script>
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+    /* ============================================================
+       PRODUCT PACKAGING ENGINE (authored on the product; built from
+       the GLOBAL units + cloned from a shared template; barcodes are
+       this product's own). The edit form represents PROD below.
+       ============================================================ */
+    const prodBase = { each:'EA', vial:'VIAL', piece:'PC', pair:'PR' };
+    const PUNITS = DB.uoms.filter(u=>u.cat==='Packaging' || u.cat==='Count');   // selectable level UoMs (global)
+    const PROD = DB.products.find(x=>x.id==='P-1001') || DB.products[0];        // edit form represents this product
+    const baseCode = prodBase[PROD.uom] || String(PROD.uom||'EA').toUpperCase();
+    const baseName = (DB.uoms.find(u=>u.code===baseCode)||{}).name || (PROD.uom||baseCode);
+
+    function seedPkg(){
+      const pk = (DB.packagings||[]).find(k=>k.product===PROD.id);
+      const lv = pk ? JSON.parse(JSON.stringify(pk.levels))
+                    : [{ level:baseName, uom:baseCode, perParent:1, factor:1, barcode:'5012345000019', note:'base unit' }];
+      Object.assign(lv[0], { base:true, level:baseName, uom:baseCode, perParent:1, factor:1 });   // lock row 0 to product UoM
+      return lv;
+    }
+    let PKG = seedPkg();      // working copy of THIS product's levels
+    let editIx = -1;          // -1 = adding; >0 = editing that level
+
+    // factor of the level a given row is "defined against": base, a named level, or (legacy) the level below
+    function parentFactor(l, i){
+      if (i===0) return 1;
+      if (l.basis==='base') return 1;
+      if (l.basis){ const b=PKG.find(x=>x.level===l.basis); return b?b.factor:1; }
+      return PKG[i-1].factor;                                  // legacy data: nested on the level below
+    }
+    function recompute(){ PKG.forEach((l,i)=>{ l.factor = i===0 ? 1 : parentFactor(l,i)*(l.perParent||1); }); }
+    function basisName(l, i){
+      if (i===0) return null;
+      return l.basis==='base' ? baseName : (l.basis || (PKG[i-1]&&PKG[i-1].level));
+    }
+
+    function renderPackaging(){
+      recompute();
+      const baseInp = document.getElementById('pk-base'); if (baseInp) baseInp.value = `${baseName} (${baseCode})`;
+      document.getElementById('pk-rows').innerHTML = PKG.map((l,i)=>{
+        const qtyCell = i===0 ? '<span class="muted">— (base)</span>'
+                              : `×${l.perParent} <span class="muted">of ${esc(basisName(l,i))}</span>`;
+        const acts = i===0 ? '' : `<a href="#" onclick="openLevel(${i});return false">Edit</a> · <a href="#" onclick="removeLevel(${i});return false">Remove</a>`;
+        return `<tr>
+          <td>${i+1}</td>
+          <td><b>${esc(l.level)}</b>${i===0?' <span class="badge b-available">base</span>':''}</td>
+          <td class="mono">${esc(l.uom)}</td>
+          <td>${qtyCell}</td>
+          <td class="mono">${l.factor}</td>
+          <td class="mono">${esc(l.barcode && l.barcode!=='—' ? l.barcode : '—')}</td>
+          <td>${acts}</td>
+        </tr>`;
+      }).join('');
+      renderBarcodes();
+    }
+
+    /* ---- Barcodes tab renders from the SAME PKG model (single source of truth) ---- */
+    function renderBarcodes(){
+      const tb = document.getElementById('bc-rows'); if (!tb) return;
+      const rows = PKG.map((l,i)=>({l,i})).filter(x=>x.l.barcode && x.l.barcode!=='—');
+      const typeFor = l => {
+        const b = String(l.barcode||'');
+        if (b.startsWith('20') || b.startsWith('02')) return 'INTERNAL';   // GS1 restricted-circulation
+        return (l.base || /each|vial|bottle|consumer/i.test(l.level)) ? 'EAN-13' : 'GS1-128';
+      };
+      tb.innerHTML = rows.length ? rows.map(({l,i})=>`
+        <tr>
+          <td>${typeFor(l)}</td>
+          <td>${esc(l.level)}</td>
+          <td class="mono">${esc(l.barcode)}</td>
+          <td>${barcodeSVG(l.barcode,{height:34,module:1.2,font:9})}</td>
+          <td class="num">×${l.factor}</td>
+          <td><a href="#" onclick="printProductLabel(${i});return false">Print</a></td>
+          <td><a href="#" onclick="openLevel(${i});return false">Edit</a></td>
+        </tr>`).join('') : `<tr><td colspan="7" class="muted">No barcodes yet — add one on a packaging level.</td></tr>`;
+    }
+
+    /* ---- clone a shared template onto this product (copy, then blank barcodes) ---- */
+    function cloneTemplate(){
+      const sel = document.getElementById('pk-template'); const id = sel.value; if (!id) return;
+      const t = DB.packagings.find(p=>p.id===id); if (!t){ sel.value=''; return; }
+      if (!confirm(`Replace this product's packaging with a copy of "${t.name}"?\nThe levels & factors are copied; product-specific barcodes are cleared (add this product's own).`)){ sel.value=''; return; }
+      PKG = JSON.parse(JSON.stringify(t.levels));
+      Object.assign(PKG[0], { base:true, level:baseName, uom:baseCode, perParent:1, factor:1 });
+      PKG.forEach((l,n)=>{ if (n>0) l.barcode='—'; });          // barcodes are product-specific
+      sel.value='';
+      renderPackaging();
+    }
+
+    /* ---- add / edit a pack level (modal) ---- */
+    function openLevel(ix){
+      editIx = (typeof ix==='number' && ix>0) ? ix : -1;
+      const lvl = editIx>0 ? PKG[editIx] : null;
+      document.getElementById('pl-uom').innerHTML = PUNITS.map(u=>`<option value="${u.code}">${u.code} — ${esc(u.name)}</option>`).join('');
+      // "Defined against": base unit + every existing non-base level except the one being edited
+      document.getElementById('pl-basis').innerHTML = '<option value="base">Base unit</option>' +
+        PKG.map((l,i)=>({l,i})).filter(x=>x.i>0 && x.i!==editIx)
+           .map(x=>`<option value="${esc(x.l.level)}">${esc(x.l.level)} (factor ${x.l.factor})</option>`).join('');
+      document.getElementById('pl-name').value    = lvl ? lvl.level : '';
+      document.getElementById('pl-uom').value     = lvl ? lvl.uom : (PUNITS[0]&&PUNITS[0].code);
+      document.getElementById('pl-basis').value   = lvl ? (lvl.basis || (editIx>1 ? PKG[editIx-1].level : 'base')) : 'base';
+      document.getElementById('pl-qty').value     = lvl ? lvl.perParent : 6;
+      document.getElementById('pl-barcode').value = (lvl && lvl.barcode && lvl.barcode!=='—') ? lvl.barcode : '';
+      document.getElementById('pl-title').textContent = lvl ? 'Edit pack level' : 'Add pack level';
+      levelHint();
+      document.getElementById('m-plevel').style.display='flex';
+    }
+    function closeLevel(){ document.getElementById('m-plevel').style.display='none'; }
+    /* ---- mint a valid INTERNAL EAN-13 (GS1 restricted-circulation prefix '20' + check digit) ----
+       For unbarcoded / repacked goods only — NOT a manufacturer GTIN. Deterministic per product+level. */
+    function eanCheck(d){ let s=0; for(let i=0;i<12;i++){ const n=+d[i]||0; s += (i%2===0)?n:n*3; } return String((10-(s%10))%10); }
+    function genInternalBarcode(){
+      const pnum = (String(PROD.id).replace(/\D/g,'') + String(PROD.sku).replace(/\D/g,'')).padEnd(7,'0').slice(0,7);
+      const seq  = String(editIx>0 ? editIx : PKG.length).padStart(3,'0');
+      const body = '20' + pnum + seq;                 // 12 digits ('20' = GS1 restricted circulation)
+      const code = body + eanCheck(body);             // + check digit = valid EAN-13
+      document.getElementById('pl-barcode').value = code;
+      const note = document.getElementById('pl-bc-note');
+      if (note) note.innerHTML = `Generated <b>internal</b> code <span class="mono">${code}</span> — GS1 restricted-use (20·) with a valid check digit. Not a manufacturer GTIN; scannable in-house only.`;
+    }
+    function levelHint(){
+      const b = document.getElementById('pl-basis').value;
+      const qty = parseInt(document.getElementById('pl-qty').value,10)||1;
+      const pf = b==='base' ? 1 : (PKG.find(l=>l.level===b)||{factor:1}).factor;
+      document.getElementById('pl-hint').textContent =
+        `Factor → base = ${pf} × ${qty} = ${pf*qty}  ·  ${b==='base'?'independent pack off the base unit':'nested on '+b}`;
+    }
+    function saveLevel(){
+      const name  = document.getElementById('pl-name').value.trim() || 'New level';
+      const uom   = document.getElementById('pl-uom').value;
+      const basis = document.getElementById('pl-basis').value;
+      const qty   = parseInt(document.getElementById('pl-qty').value,10)||1;
+      const bc    = document.getElementById('pl-barcode').value.trim() || '—';
+      const obj = { level:name, uom, basis, perParent:qty, factor:0, barcode:bc, note:`${qty} × ${basis==='base'?'base':basis}` };
+      if (editIx>0) PKG[editIx] = Object.assign({}, PKG[editIx], obj); else PKG.push(obj);
+      closeLevel(); renderPackaging();
+    }
+    function removeLevel(ix){
+      if (ix<=0) return;
+      const gone = PKG[ix].level;
+      PKG.forEach(l=>{ if (l.basis===gone) delete l.basis; });   // dependents fall back to nesting on the level below
+      PKG.splice(ix,1); renderPackaging();
+    }
+
+    /* ---- label printing (per level + all) ---- */
+    function prodLabel(i){ const l=PKG[i];
+      return labelHTML({ title:'PRODUCT · '+l.level, code:l.barcode, lines:[
+        { k:'Product', v:PROD.name }, { k:'SKU', v:PROD.sku },
+        { k:'Level', v:l.level }, { k:'Per base', v:'×'+l.factor } ]}); }
+    function printProductLabel(i){ printLabels([prodLabel(i)], PROD.name+' · '+PKG[i].level); }
+    function printAllProductLabels(){
+      const idx = PKG.map((l,i)=>({l,i})).filter(x=>x.l.barcode && x.l.barcode!=='—').map(x=>x.i);
+      if (!idx.length){ alert('No barcodes to print — add one on a packaging level.'); return; }
+      printLabels(idx.map(i=>prodLabel(i)), PROD.name+' labels');
+    }
+
+    // template selector + first render
+    (function(){
+      const sel = document.getElementById('pk-template');
+      sel.innerHTML = `<option value="">— choose a template to clone —</option>` +
+        DB.packagings.filter(p=>p.shared===true || p.client==='—').map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+      if (typeof sel._ssSync==='function') sel._ssSync();
+      renderPackaging();
+    })();
+
+    // rows grouped by client (mirrors the ERP's "EUR" currency group header)
+    (function(){
+      let html = '';
+      DB.clients.forEach(c => {
+        html += `<tr class="group"><td colspan="9">${c.name}</td></tr>`;
+        DB.products.filter(p => p.client === c.id).forEach(p => {
+          const track = [p.track.lot&&'lot',p.track.expiry&&'expiry',p.track.serial&&'serial'].filter(Boolean).join(' · ');
+          const cat = p.category ? catName(p.category)+(p.subCategory?' · '+subCatName(p.subCategory):'') : '<span class="muted">—</span>';
+          html += `<tr>
+            <td><input type="checkbox" style="width:auto"></td>
+            <td class="dots">⋮</td>
+            <td class="mono">${p.sku}</td>
+            <td><a href="#" onclick="show('edit');return false">${p.name}</a></td>
+            <td>${p.uom}</td>
+            <td class="muted">${track}</td>
+            <td class="mono">${p.barcode}</td>
+            <td style="font-size:12.5px">${cat}</td>
+            <td>Ambient</td>
+          </tr>`;
+        });
+      });
+      document.getElementById('rows').innerHTML = html;
+    })();
+
+    function show(v){
+      document.getElementById('view-list').style.display = v==='list' ? '' : 'none';
+      document.getElementById('view-edit').style.display = v==='edit' ? '' : 'none';
+      window.scrollTo(0,0);
+    }
+    function tab(el, id){
+      document.querySelectorAll('.tabs a').forEach(a=>a.classList.remove('active'));
+      el.classList.add('active');
+      ['t-details','t-storage','t-tracking','t-packaging','t-barcodes'].forEach(t=>
+        document.getElementById(t).style.display = t===id ? '' : 'none');
+    }
+
+    /* ---- Storage / slotting tab (edit form represents P-1001 / ACME) ---- */
+    const P = DB.products.find(x=>x.id==='P-1001') || DB.products[0];
+    const CLIENT = DB.clients.find(c=>c.id===P.client) || DB.clients[0];
+    const catSel = document.getElementById('e-cat');
+    const subSel = document.getElementById('e-sub');
+
+    function fillSubs(sel){
+      const c = DB.categories.find(x=>x.id===catSel.value);
+      subSel.innerHTML = `<option value="">— none —</option>` +
+        ((c&&c.subs)||[]).map(s=>`<option value="${s.id}" ${s.id===sel?'selected':''}>${s.name}</option>`).join('');
+    }
+    function onCat(){ fillSubs(''); }
+    catSel.innerHTML = `<option value="">— none —</option>` + DB.categories.map(c=>`<option value="${c.id}" ${c.id===P.category?'selected':''}>${c.name}</option>`).join('');
+    fillSubs(P.subCategory);
+    document.getElementById('e-weight').value = (P.weightKg!=null?P.weightKg:'');
+
+    function areasAt(site){ return siteAreas(site); }
+    function binsAt(site){ return DB.locations.filter(l=>l.site===site && l.type==='storage' && l.status==='active'); }
+    function prefFor(site){ return (P.preferred||[]).find(x=>x.site===site) || {mode:'none'}; }
+    function valControl(site, pr){
+      if(pr.mode==='location'){
+        const bins = binsAt(site);
+        if(!bins.length) return `<span>Location</span><input value="" placeholder="No active storage bins at this site" disabled>`;
+        return `<span>Location</span><select>${bins.map(b=>`<option value="${b.id}" ${b.id===pr.ref?'selected':''}>${b.structured} · ${b.id}</option>`).join('')}</select>`;
+      }
+      if(pr.mode==='area'){
+        const zs = areasAt(site);
+        if(!zs.length) return `<span>Area</span><input value="" placeholder="No storage areas — add one on the Sites screen" disabled>`;
+        return `<span>Area</span><select>${zs.map(z=>`<option value="${z.code}" ${z.code===pr.ref?'selected':''}>${z.name}</option>`).join('')}</select>`;
+      }
+      return `<span>&nbsp;</span><input value="" placeholder="—" disabled>`;
+    }
+    function onMode(sel){
+      const row=sel.closest('.pref-row'); const site=row.dataset.site;
+      row.querySelector('.pref-val').innerHTML = valControl(site, {mode:sel.value});
+    }
+    function renderPref(){
+      document.getElementById('pref-rows').innerHTML = (CLIENT.sites||[]).map(site=>{
+        const pr = prefFor(site);
+        return `<div class="pref-row" data-site="${site}">
+          <div class="pref-site">${dbName('sites',site)}</div>
+          <label class="field"><span>Mode</span>
+            <select class="pref-mode" onchange="onMode(this)">
+              <option value="none" ${(!pr.mode||pr.mode==='none')?'selected':''}>No preference</option>
+              <option value="location"  ${pr.mode==='location'?'selected':''}>Specific location (fixed)</option>
+              <option value="area" ${pr.mode==='area'?'selected':''}>Preferred area</option>
+            </select></label>
+          <label class="field pref-val">${valControl(site, pr)}</label>
+        </div>`;
+      }).join('') || '<p class="muted">This client has no operating sites yet.</p>';
+    }
+    renderPref();
+    document.getElementById('e-notes').innerHTML = noteField({ ref: P.id, level:'header', title:'Notes (optional)' });
+    function toggleFilter(btn){
+      const f = document.getElementById('filters');
+      const hidden = f.style.display === 'none';
+      f.style.display = hidden ? '' : 'none';
+      btn.textContent = hidden ? 'Hide filter' : 'Show filter';
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Client Stock Statement — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-statement" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Client Stock Statement">
+  <div id="page-content">
+    <style>
+      table.wf tr.tot td { font-weight:700; background:var(--fill-2); border-top:2px solid var(--line); }
+      .print-only.phead { margin-bottom:10px; }
+      .stmt-meta { display:flex; gap:26px; flex-wrap:wrap; font-size:13px; margin:4px 0 16px; }
+      .stmt-meta b { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); font-weight:600; }
+    </style>
+
+    <div class="print-only phead"><h1 id="p-title">Client Stock Statement</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Client Stock Statement</h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">3PL accountability statement — per client, per product: <b>opening → receipts → issues →
+      adjustments → closing</b> over a period. Closing is the live on-hand balance; opening is derived so the
+      statement reconciles. Reads the <code>DB.txns[]</code> audit log.</p>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Statement parameters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>Client <span class="req">*</span></span><select id="f-client"></select></label>
+        <label class="field"><span>Site</span><select id="f-site"></select></label>
+        <label class="field"><span>Period from</span><input type="date" id="f-since"></label>
+        <label class="field"><span>Period to</span><input type="date" id="f-until"></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="stmt-meta" id="meta"></div>
+
+    <div class="table-toolbar no-print">
+      <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+      <button class="btn btn-sm btn-outline" onclick="window.print()">Print</button>
+      <span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th><span class="funnel">▾</span>Product</th>
+        <th>UoM</th>
+        <th class="num">Opening</th>
+        <th class="num">Receipts (+)</th>
+        <th class="num">Issues (−)</th>
+        <th class="num">Adjustments (±)</th>
+        <th class="num">Closing</th>
+        <th>Notes</th>
+      </tr></thead><tbody id="rows"></tbody></table>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:8px">Receipts = receive / transfer-in / returns. Issues = dispatch / transfer-out. Adjustments = signed quantity adjustments &amp; count corrections in the period.</p>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const dateOf = ts => String(ts||'').slice(0,10);
+    const REC_T = ['receive','transfer-receive','return'];
+    const ISS_T = ['dispatch','transfer-ship'];
+    const ADJ_T = ['adjust','count','repack'];
+    // infer sign of an adjustment/count txn from its note (screens write "decrease"/"write-off"/"−" etc.)
+    function adjSign(note){
+      const n = String(note||'').toLowerCase();
+      if (/(decrease|write-off|loss|shrink|down|−|\-\b|over-count)/.test(n)) return -1;
+      if (/(increase|found|up|\+|under-count|gain)/.test(n)) return 1;
+      return 0;
+    }
+    const state = { client:DB.clients[0]?.id||'', site:'all', since:'2026-06-01', until:'' };
+    function clientOf(prod){ const p=DB.products.find(x=>x.id===prod); return p?p.client:''; }
+
+    function render(){
+      const cid = state.client;
+      const until = state.until || WMS_TODAY;
+      // products belonging to this client
+      const prods = DB.products.filter(p=>p.client===cid);
+
+      let html='', tOpen=0,tRec=0,tIss=0,tAdj=0,tClose=0;
+      prods.forEach(p=>{
+        // closing = live on-hand for this product/client (+ site scope)
+        const closing = DB.lpns.filter(l=>l.product===p.id && l.client===cid && (l.qty||0)>0 &&
+          (state.site==='all'||l.site===state.site) && l.status!=='in-transit').reduce((s,l)=>s+l.qty,0);
+        // in-period movements from the ledger
+        let rec=0, iss=0, adj=0;
+        (DB.txns||[]).forEach(t=>{
+          if (t.product!==p.id) return;
+          if (state.site!=='all' && t.site!==state.site && t.site) return;
+          const d = dateOf(t.ts);
+          if (state.since && d < state.since) return;
+          if (d > until) return;
+          if (REC_T.includes(t.type)) rec += (t.qty||0);
+          else if (ISS_T.includes(t.type)) iss += (t.qty||0);
+          else if (ADJ_T.includes(t.type)) adj += adjSign(t.note) * (t.qty||0);
+        });
+        const opening = closing - rec + iss - adj;   // derived so the line reconciles
+        // skip products with no balance and no movement at all
+        if (closing===0 && rec===0 && iss===0 && adj===0 && opening===0) return;
+        tOpen+=opening; tRec+=rec; tIss+=iss; tAdj+=adj; tClose+=closing;
+        html += `<tr>
+          <td>${esc(prodName(p.id))}</td>
+          <td class="muted">${esc(p.uom||'')}</td>
+          <td class="num">${opening}</td>
+          <td class="num pos">${rec?('+'+rec):0}</td>
+          <td class="num neg">${iss?('−'+iss):0}</td>
+          <td class="num ${adj<0?'neg':adj>0?'pos':''}">${adj>0?'+'+adj:adj}</td>
+          <td class="num"><b>${closing}</b></td>
+          <td>${noteFor(p.id) || '<span class="muted">—</span>'}</td>
+        </tr>`;
+      });
+      $('rows').innerHTML = html
+        ? html + `<tr class="tot"><td>Total</td><td></td><td class="num">${tOpen}</td>
+            <td class="num pos">${tRec?('+'+tRec):0}</td><td class="num neg">${tIss?('−'+tIss):0}</td>
+            <td class="num ${tAdj<0?'neg':tAdj>0?'pos':''}">${tAdj>0?'+'+tAdj:tAdj}</td><td class="num">${tClose}</td><td></td></tr>`
+        : `<tr><td colspan="8" class="muted" style="padding:18px">No stock or movement for this client in the period.</td></tr>`;
+
+      const cl = DB.clients.find(c=>c.id===cid)||{};
+      $('meta').innerHTML = `
+        <div><b>Client</b>${esc(cl.name||'—')}</div>
+        <div><b>Site</b>${state.site==='all'?'All sites':esc(dbName('sites',state.site))}</div>
+        <div><b>Period</b>${esc(state.since||'—')} → ${esc(until)}</div>
+        <div><b>Closing on-hand</b>${tClose} unit(s)</div>`;
+      $('summary').textContent = `${esc(cl.name||'')} · ${tClose} unit(s) closing`;
+      $('p-title').textContent = `Client Stock Statement — ${cl.name||''}`;
+      $('p-filters').textContent = `${state.since||'—'} → ${until}  ·  Site: ${state.site==='all'?'All':dbName('sites',state.site)}`;
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-client').innerHTML = DB.clients.map(c=>`<option value="${c.id}"${c.id===state.client?' selected':''}>${esc(c.name)}</option>`).join('');
+    $('f-site').innerHTML   = `<option value="all">All sites</option>` + DB.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('f-since').value = state.since;
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; render(); });
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; render(); });
+    $('f-since').addEventListener('change',  e=>{ state.since=e.target.value; render(); });
+    $('f-until').addEventListener('change',  e=>{ state.until=e.target.value; render(); });
+    render();
+  </script>
+</body></html>

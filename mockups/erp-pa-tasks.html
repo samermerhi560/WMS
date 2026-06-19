@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Putaway — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="pa-tasks" data-erp-title="Putaway"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Putaway › Tasks">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+
+      .policy-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 14px;
+        background:var(--brand-tint); border:1px solid var(--brand); border-radius:var(--radius); margin-bottom:14px; }
+      .policy-bar .t { font-weight:600; }
+      .policy-bar .sw { margin-left:auto; display:inline-flex; align-items:center; gap:8px; }
+      .policy-bar small { color:var(--ink-soft); }
+
+      /* suggestion cards */
+      .sugg { display:flex; align-items:flex-start; gap:12px; padding:12px 14px;
+        border:1px solid var(--line-soft); border-radius:var(--radius); margin-bottom:10px; background:var(--white); }
+      .sugg:hover { background:var(--brand-tint2); }
+      .sugg.rec { border-left:3px solid var(--brand); }
+      .sugg.sel { border-color:var(--brand); box-shadow:0 0 0 2px var(--brand-tint); background:var(--brand-tint); }
+      .sugg .body { flex:1; min-width:0; }
+      .sugg .loc { font-weight:700; font-size:15px; }
+      .sugg .sysid { color:var(--ink-faint); font-size:12px; margin-left:6px; }
+      .sugg .head { color:var(--ink-soft); font-size:12px; margin-top:3px; }
+      .sugg .head b { color:var(--ink); font-weight:600; }
+      .sugg .why { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
+      .sugg .pick { align-self:center; }
+      .rec-flag { display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase;
+        letter-spacing:.04em; color:var(--brand-text); margin-bottom:3px; }
+
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-ok    { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-info  { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tag.tag-rule  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-muted { color:var(--ink-faint); }
+
+      .excluded { border:1px solid var(--line-soft); border-radius:var(--radius); padding:10px 14px; margin-top:4px; background:var(--fill); }
+      .excluded .x-row { display:flex; gap:10px; align-items:baseline; padding:4px 0; font-size:12.5px; }
+      .excluded .x-row .loc { font-weight:600; min-width:120px; }
+      .excluded .x-row .why { color:var(--bad); }
+
+      /* scan / manual entry */
+      .scan-line { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+      .scan-line .grow { flex:1; min-width:220px; }
+      .or-sep { display:flex; align-items:center; gap:10px; color:var(--ink-faint);
+        font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin:14px 0; }
+      .or-sep::before, .or-sep::after { content:""; flex:1; height:1px; background:var(--line-soft); }
+
+      /* chosen / validation bar */
+      .chosen { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:14px 16px;
+        border:1px solid var(--line); border-radius:var(--radius); background:var(--fill); }
+      .chosen.ok    { border-color:#6fae72; background:#eef7ef; }
+      .chosen.warn  { border-color:#caa24a; background:#fbf6e9; }
+      .chosen.error { border-color:#c47e7e; background:#f8eeee; }
+      .chosen .mark { font-size:22px; line-height:1; }
+      .chosen.ok .mark    { color:var(--ok); }
+      .chosen.warn .mark  { color:#8a6d00; }
+      .chosen.error .mark { color:var(--bad); }
+      .chosen .txt { flex:1; min-width:200px; }
+      .chosen .txt b { display:block; }
+      .chosen .txt small { color:var(--ink-soft); }
+
+      .pref-note { padding:10px 12px; border-radius:var(--radius); background:var(--brand-tint);
+        border:1px solid var(--brand); font-size:12.5px; margin-bottom:12px; }
+      .pref-note.none { background:var(--fill); border-color:var(--line-soft); color:var(--ink-soft); }
+
+      .dest-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+      .sugg { cursor:pointer; }
+      .sel-tag { display:none; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--ok); }
+      .sugg.sel .sel-tag { display:inline-block; }
+
+      /* mixed-pallet decomposition */
+      .plt-panel { border-left:3px solid #2f6fed; }
+      .plt-manifest { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+      .plt-chip { font-size:12px; padding:3px 9px; border-radius:12px; border:1px solid var(--line); background:var(--fill); }
+      .plt-chip.done { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .plt-chip.now  { border-color:#2f6fed; background:#eef4ff; color:#1d4ed8; font-weight:700; }
+      .plt-chip.open { cursor:pointer; }
+      .plt-chip.open:hover { border-color:#2f6fed; background:#eef4ff; }
+      .plt-hint { font-size:12px; color:var(--ink-soft); margin:8px 0 0; }
+
+      /* read-only "already put away" progress */
+      .progress-panel { background:#fbf6e9; border-color:#e3d4a3; }
+      .prog-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+      .prog-head h3 { margin:0; font-size:14px; }
+      .prog-head .big { font-weight:700; }
+      .prog-bar { height:8px; border-radius:5px; background:#e7e1cb; overflow:hidden; flex:1; min-width:120px; max-width:260px; }
+      .prog-bar > i { display:block; height:100%; background:#6fae72; }
+      .prog-list { display:flex; flex-direction:column; gap:6px; }
+      .prog-row { display:flex; gap:10px; align-items:baseline; font-size:12.5px; padding:7px 10px;
+        border:1px solid var(--line-soft); border-radius:var(--radius); background:var(--white); }
+      .prog-row .q { font-weight:700; white-space:nowrap; color:#235c25; }
+      .prog-row .to .mono { font-weight:600; }
+      .prog-row .meta2 { margin-left:auto; color:var(--ink-faint); font-size:11px; white-space:nowrap; }
+      .row-sub { font-size:11px; color:#7a5a07; font-weight:600; margin-top:2px; }
+
+      /* F9: expired-plate block */
+      .expired-panel { background:#f8eeee; border-color:#c47e7e; }
+      .expired-panel .eh { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .expired-panel .eh .mark { font-size:22px; line-height:1; color:var(--bad); }
+      .expired-panel .eh h3 { margin:0; font-size:14px; color:#8a2020; }
+      .expired-panel p { margin:8px 0 0; font-size:12.5px; color:#6b1f1f; }
+      .expired-panel .lots { margin:8px 0 0; font-size:12px; color:#6b1f1f; }
+      .expired-panel .lots b { color:#8a2020; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="pa-banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Putaway</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn" disabled>Export</button></div>
+      </div>
+      <p class="sub">One task per license plate sitting in the <b>wait/put</b> location with status <b>to&nbsp;putaway</b> (the good stock from receiving), for the operator's site. Select an LPN — the system suggests locations <b>home → consolidate → category</b>, filtered by capacity and segregation, then confirm flips the stock to <b>available</b>. <b>Mixed pallets</b> (one license plate, many products) are listed separately and <b>decompose in any order you choose</b> — tap the product you want to place next; the system mints one child LPN per line. <b>Completed</b> keeps the putaway history (what went where, by whom) with label reprint. Manual entry is the full ERP fallback when scanners are offline.</p>
+
+      <div class="tabs">
+        <a href="#" id="tab-open" class="active" onclick="setTab('open',this);return false">To put away</a>
+        <a href="#" id="tab-done" onclick="setTab('done',this);return false">Completed</a>
+      </div>
+
+      <!-- shared filters (apply to the active tab) -->
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>LPN</span><input id="f-lpn"></label>
+          <label class="field"><span>Client</span><select id="f-client"></select></label>
+          <label class="field"><span>Site (operator)</span><select id="f-site"></select></label>
+          <label class="field"><span>Product</span><input id="f-prod"></label>
+          <label class="field"><span>Assignee</span><select id="f-assignee"></select></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+
+      <!-- ===== Pane: To put away (open work) ===== -->
+      <div id="pane-open">
+        <div class="policy-bar">
+          <span class="t">Client–area segregation</span>
+          <small id="seg-desc"></small>
+          <label class="sw"><input type="checkbox" id="seg-toggle" style="width:auto"> <span id="seg-state"></span></label>
+        </div>
+
+        <!-- mixed pallets awaiting decomposition (transient handling units) -->
+        <div id="pallet-list-wrap"></div>
+
+        <div class="table-toolbar">
+          <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+          <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Client <span class="x">✕</span></span>
+          <span class="refresh">⟳</span></div>
+        <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+          <table class="wf"><thead><tr>
+            <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+            <th><span class="funnel">▾</span>LPN</th><th><span class="funnel">▾</span>Client</th>
+            <th><span class="funnel">▾</span>Product</th><th><span class="funnel">▾</span>Lot</th>
+            <th><span class="funnel">▾</span>Expiry</th><th><span class="funnel">▾</span>Qty</th>
+            <th><span class="funnel">▾</span>From</th><th><span class="funnel">▾</span>Status</th>
+            <th><span class="funnel">▾</span>Assignee</th><th></th>
+          </tr></thead><tbody id="rows"></tbody></table>
+        </div>
+      </div>
+
+      <!-- ===== Pane: Completed (putaway history — driven by the txn log) ===== -->
+      <div id="pane-done" style="display:none">
+        <div class="table-toolbar">
+          <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+          <button class="btn btn-sm" disabled>Columns</button><span class="chip">↓ When <span class="x">✕</span></span>
+          <span class="refresh">⟳</span></div>
+        <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+          <table class="wf"><thead><tr>
+            <th style="width:28px">⚙</th>
+            <th><span class="funnel">▾</span>When</th><th><span class="funnel">▾</span>LPN</th>
+            <th><span class="funnel">▾</span>Client</th><th><span class="funnel">▾</span>Product</th>
+            <th><span class="funnel">▾</span>Lot</th><th><span class="funnel">▾</span>Expiry</th>
+            <th><span class="funnel">▾</span>Qty</th><th><span class="funnel">▾</span>From → To</th>
+            <th><span class="funnel">▾</span>By</th><th><span class="funnel">▾</span>Source</th><th></th>
+          </tr></thead><tbody id="done-rows"></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== DETAIL ===================== -->
+    <div id="view-detail" style="display:none">
+      <div class="page-head"><h1 id="d-title">Put away</h1>
+        <div class="acts">
+          <label class="field" style="margin-bottom:0;max-width:230px"><span>Assignee <span class="muted">· dispatch to (optional)</span></span><select id="e-assignee" onchange="onAssigneeChange()"></select></label>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+        </div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to task list</a></div>
+      <div id="d-msg" class="panel" style="display:none;background:#e6f3e7;border-color:#6fae72;margin-bottom:10px"></div>
+      <div id="d-bc" style="margin-bottom:10px"></div>
+
+      <div class="panel">
+        <fieldset><legend id="d-legend">License plate to put away</legend>
+          <div class="sum-grid" id="d-summary"></div>
+        </fieldset>
+      </div>
+
+      <!-- read-only progress: what has ALREADY been put away from this plate / pallet (partial work) -->
+      <div id="d-progress" class="panel progress-panel" style="display:none"></div>
+
+      <!-- F9: expired plate/line — block store-to-available; force routing via the reject (quarantine/damaged) path -->
+      <div id="d-expired" class="panel expired-panel" style="display:none"></div>
+
+      <!-- damage found at putaway: peel rejected units off to a blocked disposition before storing the good remainder -->
+      <div class="panel" id="reject-panel">
+        <div class="dest-head"><h3 style="margin:0">Found damage?</h3>
+          <button class="btn btn-sm btn-outline" id="reject-toggle" onclick="toggleReject()" style="margin-left:auto">⚠ Report damage / reject</button></div>
+        <div id="reject-body" style="display:none;margin-top:10px">
+          <p class="muted" style="margin:0 0 10px;font-size:12px">Peel damaged / suspect units off this plate <b>before</b> putaway — they route to a blocked disposition (quarantine / hold / damaged), excluded from available stock. The <b>good remainder stays on the task</b> to be put away. Attach evidence in the <i>Condition / damage photos</i> above.</p>
+          <div class="scan-line" style="align-items:flex-end;gap:14px;flex-wrap:wrap">
+            <label class="field" style="max-width:150px;margin-bottom:0"><span>Quantity to reject</span>
+              <input id="rej-qty" type="number" min="1" step="1" oninput="updateRejNote()"></label>
+            <label class="field" style="max-width:190px;margin-bottom:0"><span>Disposition <span class="req">*</span></span>
+              <select id="rej-disp" onchange="fillRejReasons(true)">
+                <option value="quarantine">Quarantine (QA zone)</option>
+                <option value="hold">Hold</option>
+                <option value="damaged">Damaged</option>
+              </select></label>
+            <label class="field" style="max-width:230px;margin-bottom:0"><span>Reason <span class="req">*</span></span>
+              <select id="rej-reason"><option value="">— select —</option></select></label>
+            <button class="btn btn-primary" id="rej-confirm" onclick="confirmReject()">Reject units</button>
+          </div>
+          <p class="muted" id="rej-note" style="margin:8px 0 0;font-size:12px"></p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="dest-head"><h3 style="margin:0">Quantity to put away</h3></div>
+        <div class="scan-line" style="margin-top:6px">
+          <label class="field" style="max-width:200px;margin-bottom:0"><span>Place into this bin</span>
+            <input id="place-qty" type="number" min="1" step="1"></label>
+          <span class="muted" id="qty-note" style="align-self:center"></span>
+        </div>
+        <p class="muted" style="margin:8px 0 0;font-size:12px">Less than the full quantity <b>splits</b> the plate — the amount you enter goes into the chosen bin; the remainder becomes a new putaway task (a child LPN) so you can place it in another bin.</p>
+      </div>
+
+      <div class="panel">
+        <div class="dest-head">
+          <h3 style="margin:0">Choose destination</h3>
+          <button class="btn btn-sm btn-outline" id="mode-toggle" onclick="toggleMode()" style="margin-left:auto">Assign manually →</button>
+        </div>
+
+        <!-- F10: no-bin-fits → Park to overflow / staging (always visible; manual mode is auto-shown when empty) -->
+        <div id="overflow-wrap"></div>
+
+        <div id="mode-suggest">
+          <p class="muted" style="margin:6px 0 10px;font-size:12px">Ranked <b>home → consolidate → category</b> — only capacity-OK, same-site locations the client may use. Tap a card to select it; the recommended one is pre-selected.</p>
+          <div id="suggs"></div>
+          <div id="excluded-wrap"></div>
+        </div>
+
+        <div id="mode-manual" style="display:none">
+          <div id="pref-note" class="pref-note"></div>
+          <div class="scan-line">
+            <label class="field grow" style="margin-bottom:0"><span>Scan / enter destination (System ID, structured code, or label)</span>
+              <input id="loc-scan" placeholder="e.g. LOC-A0101  ·  1-A-01-R1-B01  ·  Cold zone" autocomplete="off"></label>
+            <button class="btn btn-outline" onclick="applyScan()">Check</button>
+          </div>
+          <div class="or-sep">or pick by storage area</div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            <label class="field" style="min-width:240px;max-width:300px"><span>Storage area</span><select id="area-filter" onchange="onAreaFilter()"></select></label>
+            <label class="field" style="min-width:280px;flex:1"><span>Location</span><select id="loc-select"></select></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 style="margin-top:0">Selected destination</h3>
+        <div id="chosen-wrap"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/barcode.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const PHYS = new Set(['available','quarantine','damaged','hold']);
+
+    /* ---- helpers ---- */
+    function prod(pid){ return DB.products.find(x=>x.id===pid); }
+    function shortProd(pid){ const p=prod(pid); return p?p.name:pid; }
+    function loc(id){ return DB.locations.find(x=>x.id===id); }
+    function areaOf(l){ return (l && l.area) || ''; }
+    function areaProfile(site, area){ return areaInfo(site, area); }
+    function segOn(){ return !!(DB.settings && DB.settings.clientAreaSegregation); }
+    function isCold(pid){ const p=prod(pid)||{}; return p.subCategory==='SUB-VAX' || /cold|chain|vaccine/i.test(p.name||''); }
+
+    // physical occupancy of a bin (counts blocked stock too — it still takes space)
+    function physLoad(binId){
+      let units=0, weight=0, lpns=0;
+      DB.lpns.filter(l=>l.loc===binId && PHYS.has(l.status)).forEach(l=>{ units+=l.qty; weight+=l.qty*unitWeight(l.product); lpns++; });
+      return { units, weight:+weight.toFixed(2), lpns };
+    }
+    function lpnLoad(task){ return { units:task.qty, weight:+(task.qty*unitWeight(task.product)).toFixed(2), lpns:1 }; }
+
+    // capacity check: returns { ok, fails:[{dim,after,limit}], after:{units,weight,lpns} }
+    function capacity(bin, task){
+      const pl = physLoad(bin.id), L = lpnLoad(task);
+      const after = { units:pl.units+L.units, weight:+(pl.weight+L.weight).toFixed(1), lpns:pl.lpns+L.lpns };
+      const fails = [];
+      if (bin.maxUnits   != null && after.units  > bin.maxUnits)   fails.push({dim:'units',  after:after.units,  limit:bin.maxUnits});
+      if (bin.maxWeightKg!= null && after.weight > bin.maxWeightKg) fails.push({dim:'kg',     after:after.weight, limit:bin.maxWeightKg});
+      if (bin.maxLpns    != null && after.lpns   > bin.maxLpns)    fails.push({dim:'slots',  after:after.lpns,   limit:bin.maxLpns});
+      return { ok:fails.length===0, fails, after, pl };
+    }
+    function headroomTxt(bin, task){
+      const c = capacity(bin, task), parts = [];
+      if (bin.maxUnits   != null) parts.push(`${c.after.units}/${bin.maxUnits} units`);
+      if (bin.maxWeightKg!= null) parts.push(`${c.after.weight}/${bin.maxWeightKg} kg`);
+      if (bin.maxLpns    != null) parts.push(`${c.after.lpns}/${bin.maxLpns} slots`);
+      return parts.length ? `Fits — ${parts.join(' · ')}` : 'Fits';
+    }
+    function segAllowed(bin, task){
+      if (!segOn()) return true;
+      const zp = areaProfile(bin.site, areaOf(bin)); const owner = zp && zp.owningClient;
+      return !owner || owner === task.client;
+    }
+    function consolidatesHere(bin, task){
+      const here = DB.lpns.filter(l=>l.loc===bin.id && l.status==='available' && l.product===task.product && l.client===task.client);
+      return { yes:here.length>0, units:here.reduce((s,l)=>s+l.qty,0), lpns:here.length };
+    }
+    function isHome(bin, task){
+      const p = prod(task.product) || {};
+      return (p.preferred||[]).some(pr => pr.site===task.site &&
+        ((pr.mode==='location' && pr.ref===bin.id) || (pr.mode==='area' && pr.ref===areaOf(bin))));
+    }
+    function homeKind(task){
+      const p = prod(task.product) || {};
+      const pr = (p.preferred||[]).find(x=>x.site===task.site);
+      return pr ? pr.mode : null;
+    }
+
+    /* ---- session state ---- */
+    const state = { site:'S-LYON', client:'all', filterLpn:'', filterProd:'', assignee:'all' };
+    let cur = null;        // current task — a real to-putaway LPN, OR a synthetic mixed-pallet line
+    let curPallet = null;  // pallet id currently being decomposed (null for single-LPN putaway)
+    let choice = null;     // { id, raw, v:{level,msg,loc} }
+    let placeQty = 0;      // qty to place into the chosen bin (≤ task qty); < full splits across bins
+    let manualMode = false, topSuggestionId = '', lastSuggCount = 0;
+    // The task as seen by capacity / ranking for the CURRENT placeQty (so a partial can fit a smaller bin).
+    function effTask(){ return cur ? Object.assign({}, cur, { qty: Math.min(Math.max(1, placeQty||0), cur.qty) }) : null; }
+
+    /* ============================================================ TABS (open ⇄ completed) */
+    let paTab = 'open';
+    function setTab(t, el){
+      paTab = t;
+      document.querySelectorAll('.tabs a').forEach(a=>a.classList.remove('active'));
+      if (el) el.classList.add('active');
+      renderList();
+    }
+    // Dispatcher: shows the open worklist or the completed history per the active tab.
+    function renderList(){
+      const open = paTab==='open';
+      $('pane-open').style.display = open ? '' : 'none';
+      $('pane-done').style.display = open ? 'none' : '';
+      if (open) renderOpen(); else renderDone();
+    }
+
+    /* ============================================================ LIST */
+    function tasks(){
+      return DB.lpns.filter(l => {
+        if (l.status !== 'to-putaway') return false;
+        if (l.site !== state.site) return false;
+        if (state.client !== 'all' && l.client !== state.client) return false;
+        if (!assigneeFilterPass(l, state.assignee)) return false;   // Assignee filter (field lives on the LPN)
+        if (state.filterLpn && !l.id.toLowerCase().includes(state.filterLpn)) return false;
+        if (state.filterProd){ const p=prod(l.product)||{}; if(!((p.name+' '+(p.sku||'')).toLowerCase().includes(state.filterProd))) return false; }
+        return true;
+      });
+    }
+    function renderOpen(){
+      const list = tasks();
+      $('rows').innerHTML = list.length ? list.map(l => {
+        const p = prod(l.product) || {}; const from = loc(l.loc);
+        const prog = lpnPutawayProgress(l.id);   // partial work already done on this plate?
+        return `<tr>
+          <td><input type="checkbox" style="width:auto"></td><td class="dots">⋮</td>
+          <td class="mono">${l.id}</td>
+          <td>${dbName('clients', l.client)}</td>
+          <td>${prodName(l.product)}${testCaseNote(l.product)?`<div style="font-size:11px;color:#1d4ed8;font-weight:600;margin-top:2px">${testCaseNote(l.product)}</div>`:''}</td>
+          <td class="mono">${tracksLot(l.product) ? (l.lot || '—') : '<span class="muted">n/a</span>'}</td>
+          <td>${tracksExpiry(l.product) ? (l.expiry || '—') : '<span class="muted">n/a</span>'}</td>
+          <td>${l.qty} ${p.uom || ''}${prog?`<div class="row-sub">${prog.placed} of ${prog.original} placed</div>`:''}</td>
+          <td>${from ? `<span class="mono">${from.structured}</span> <span class="muted" style="font-size:11px">${from.userRef||from.type}</span>` : '—'}</td>
+          <td>${statusBadge('to-putaway')}${prog?` <span class="tag tag-rule" title="${prog.placed} of ${prog.original} already put away to other bin(s)">partial</span>`:''}</td>
+          <td>${l.assignee ? `<span class="tag tag-rule" title="Dispatched to this person">${esc(assigneeName(l.assignee))}${isMine(l)?' · <b>me</b>':''}</span>` : '<span class="muted">Any</span>'}</td>
+          <td><a href="#" onclick="openPutaway('${l.id}');return false">${prog?'Resume ›':'Put away ›'}</a></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="12" class="muted" style="padding:18px">No single license plates awaiting putaway at ${dbName('sites',state.site)}.</td></tr>`;
+      renderPalletList();
+      const total = DB.lpns.filter(l=>l.status==='to-putaway' && l.site===state.site).length;
+      const nplt = palletsAtSite(state.site, state.client==='all' ? null : state.client).length;
+      $('list-summary').textContent = `${list.length} LPN task(s) shown · ${total} awaiting putaway${nplt?` · ${nplt} mixed pallet(s)`:''} at ${dbName('sites',state.site)}`;
+    }
+
+    /* ---- mixed-pallet worklist (transient handling units, decompose into child LPNs) ---- */
+    function renderPalletList(){
+      const wrap = $('pallet-list-wrap'); if (!wrap) return;
+      const plts = palletsAtSite(state.site, state.client==='all' ? null : state.client)
+        .filter(p => assigneeFilterPass(p, state.assignee));   // Assignee filter (field lives on the pallet)
+      if (!plts.length){ wrap.innerHTML=''; return; }
+      wrap.innerHTML = `<div class="panel plt-panel" style="margin-bottom:14px">
+        <div class="filter-head"><span class="ttl">📦 Mixed pallets to decompose (${plts.length})</span>
+          <span class="right muted" style="font-size:12px">Select a pallet → place each product into a bin → one child LPN per line</span></div>
+        <table class="wf"><thead><tr><th>Pallet</th><th>Client</th><th>Contents</th><th>From</th><th>Status</th><th>Assignee</th><th></th></tr></thead>
+        <tbody>${plts.map(p => { const t=palletTotals(p);
+          const placedLines = p.lines.length - palletOpenLines(p).length;   // fully-placed product lines so far
+          const started = placedLines>0;
+          return `<tr>
+          <td class="mono">${esc(p.id)}</td>
+          <td>${dbName('clients', p.client)}</td>
+          <td>${t.lines} product(s) left · ${t.units} units${p.asn?` · <span class="mono">${esc(p.asn)}</span>`:''}${started?`<div class="row-sub">${placedLines} of ${p.lines.length} product line(s) already placed</div>`:''}</td>
+          <td><span class="mono">${esc(locName(p.loc))}</span></td>
+          <td>${statusBadge('to-putaway')}${started?` <span class="tag tag-rule" title="${placedLines} of ${p.lines.length} product line(s) already decomposed">partial</span>`:''}</td>
+          <td>${p.assignee ? `<span class="tag tag-rule" title="Dispatched to this person">${esc(assigneeName(p.assignee))}${isMine(p)?' · <b>me</b>':''}</span>` : '<span class="muted">Any</span>'}</td>
+          <td><a href="#" onclick="openPallet('${p.id}');return false">${started?'Resume ›':'Decompose ›'}</a></td>
+        </tr>`; }).join('')}</tbody></table></div>`;
+    }
+
+    /* ---- Completed putaways (history) — driven by the txn log; mirrors the Receive "Closed" tab ---- */
+    function putawayTxns(){
+      return (DB.txns||[]).filter(t => t.type==='putaway' && t.site===state.site
+          && (state.client==='all' || (prod(t.product)||{}).client===state.client)
+          && (!state.filterLpn  || (t.lpn||'').toLowerCase().includes(state.filterLpn))
+          && (!state.filterProd || ((prod(t.product)||{}).name+' '+((prod(t.product)||{}).sku||'')).toLowerCase().includes(state.filterProd)))
+        .slice().reverse();   // newest first
+    }
+    function renderDone(){
+      const list = putawayTxns();
+      $('done-rows').innerHTML = list.length ? list.map(t => {
+        const p = prod(t.product) || {}; const l = lpnById(t.lpn);
+        const lot = tracksLot(t.product)    ? esc((l&&l.lot)||'—')    : '<span class="muted">n/a</span>';
+        const exp = tracksExpiry(t.product) ? esc((l&&l.expiry)||'—') : '<span class="muted">n/a</span>';
+        const src = (t.ref && /^(LPN|PLT)-/i.test(t.ref)) ? `<span class="mono">${esc(t.ref)}</span>` : '<span class="muted">—</span>';
+        return `<tr>
+          <td class="dots">⋮</td>
+          <td class="muted" style="white-space:nowrap">${esc(t.ts||'—')}</td>
+          <td class="mono">${esc(t.lpn)}</td>
+          <td>${dbName('clients', p.client)}</td>
+          <td>${prodName(t.product)}${testCaseNote(t.product)?`<div style="font-size:11px;color:#1d4ed8;font-weight:600;margin-top:2px">${testCaseNote(t.product)}</div>`:''}</td>
+          <td class="mono">${lot}</td>
+          <td>${exp}</td>
+          <td>${t.qty} ${esc(p.uom||'')}</td>
+          <td>${t.from?`<span class="mono">${esc(locName(t.from))}</span>`:'<span class="muted">—</span>'} <span class="muted">→</span> <span class="mono">${esc(locName(t.to))}</span></td>
+          <td>${esc(t.user||'—')}</td>
+          <td>${src}</td>
+          <td style="white-space:nowrap"><a href="#" onclick="printPutawayTxnLabel('${esc(t.id)}');return false">Reprint label</a>
+            <span class="muted"> · </span><a href="erp-inv-transfer.html?lpn=${encodeURIComponent(t.lpn)}" title="Mis-putaway? Open the intra-site Move flow pre-filled with this plate">Wrong bin? Move ▸</a></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="12" class="muted" style="padding:18px">No completed putaways for this view at ${dbName('sites',state.site)}. They appear here once you put a plate away.</td></tr>`;
+      $('list-summary').textContent = `${list.length} completed putaway(s) at ${dbName('sites',state.site)}`;
+    }
+    // Reprint the label of a put-away plate straight from its txn (re-prints, never re-mints) — current lot/expiry/location.
+    function printPutawayTxnLabel(txnId){
+      const t = (DB.txns||[]).find(x=>x.id===txnId); if (!t) return;
+      const p = prod(t.product) || {}; const l = lpnById(t.lpn);
+      const lines = [ { k:'Product', v:prodName(t.product) }, { k:'Qty', v:`${t.qty} ${p.uom||''}` } ];
+      if (tracksLot(t.product)    && l && l.lot)    lines.push({ k:'Lot', v:l.lot });
+      if (tracksExpiry(t.product) && l && l.expiry) lines.push({ k:'Expiry', v:l.expiry });
+      lines.push({ k:'Location', v:locName(t.to) });
+      if (t.ref && /^(LPN|PLT)-/i.test(t.ref)) lines.push({ k:'From unit', v:t.ref });
+      printLabels([ labelHTML({ title:'LPN', code:t.lpn, lines }) ], 'LPN label · '+t.lpn);
+    }
+
+    function paintSeg(){
+      $('seg-toggle').checked = segOn();
+      $('seg-state').textContent = segOn() ? 'ON' : 'OFF';
+      $('seg-desc').textContent = segOn()
+        ? 'Clients are offered only their own areas plus shared (unowned) areas; other areas are blocked.'
+        : 'Off — clients share areas; area ownership is informational only. (Normally set in Master Data.)';
+    }
+
+    /* ============================================================ SUGGESTIONS */
+    function rankFor(task){
+      const bins = DB.locations.filter(l => l.site===task.site && l.status==='active' && l.type==='storage');
+      const suggestions = [], excluded = [];
+      bins.forEach(b => {
+        const cap = capacity(b, task), seg = segAllowed(b, task), fz = frozenTakeFor(b.id);
+        if (!cap.ok || !seg || fz){
+          const why = [];
+          if (fz) why.push(`frozen — stock-take ${fz.id}`);
+          if (!seg){ const zp=areaProfile(b.site,areaOf(b)); why.push(`reserved for ${dbName('clients', zp.owningClient)}`); }
+          if (!cap.ok) why.push('full — ' + cap.fails.map(f=>`${f.dim} ${f.after}/${f.limit}`).join(', '));
+          excluded.push({ b, why:why.join(' · ') });
+          return;
+        }
+        let score = 0; const tags = [];
+        if (isHome(b, task)) { score += 1000; tags.push({t:`Product home${homeKind(task)==='area'?' (area)':''}`, cls:'tag-ok'}); }
+        const cons = consolidatesHere(b, task);
+        if (cons.yes) { score += 500; tags.push({t:`Consolidate — ${cons.units} unit(s) of same stock here`, cls:'tag-info'}); }
+        const zp = areaProfile(b.site, areaOf(b));
+        if (zp && zp.preferredSubCategories.includes((prod(task.product)||{}).subCategory)) { score += 120; tags.push({t:`Category: ${subCatName((prod(task.product)||{}).subCategory)}`, cls:'tag-rule'}); }
+        else if (zp && zp.preferredCategories.includes((prod(task.product)||{}).category)) { score += 80; tags.push({t:`Category: ${catName((prod(task.product)||{}).category)} area`, cls:'tag-rule'}); }
+        if (isCold(task.product) && /cold/i.test(b.userRef||'')) { score += 60; tags.push({t:'Cold storage', cls:'tag-rule'}); }
+        if (cap.pl.units === 0) { score += 10; tags.push({t:'Empty bin', cls:'tag-muted'}); }
+        // small roominess tiebreak
+        if (b.maxUnits != null) score += Math.max(0, (b.maxUnits - cap.after.units)) / 100000;
+        suggestions.push({ b, score, tags, cap });
+      });
+      suggestions.sort((a,b)=>b.score-a.score);
+      return { suggestions, excluded };
+    }
+
+    /* ---- preferred-place note + area-filtered location picker ---- */
+    function activeStorageAt(site){ return DB.locations.filter(l=>l.site===site && l.status==='active' && l.type==='storage'); }
+    function activeAllAt(site){ return DB.locations.filter(l=>l.site===site && l.status==='active'); }
+    function preferredFor(task){ const p=prod(task.product)||{}; return (p.preferred||[]).find(x=>x.site===task.site) || null; }
+    function areaName(site, code){ const a=areaInfo(site, code); return a?a.name:code; }
+
+    function renderPlaceBlock(task){
+      const pref = preferredFor(task), note = $('pref-note');
+      let defaultArea = '', preselectBin = '';
+      if (pref && pref.mode==='location'){
+        const b = loc(pref.ref);
+        if (b){ defaultArea = b.area || ''; preselectBin = b.id;
+          note.className = 'pref-note';
+          note.innerHTML = `<b>Preferred location for this product:</b> <span class="mono">${esc(b.structured)}</span> <span class="muted mono">(${esc(b.id)})</span>${b.area?` · ${esc(areaName(task.site,b.area))}`:''}. Pre-selected below — adjust if needed.`;
+        } else { note.className='pref-note none'; note.textContent='The product’s preferred location is no longer valid — choose another.'; }
+      } else if (pref && pref.mode==='area'){
+        defaultArea = pref.ref; note.className = 'pref-note';
+        note.innerHTML = `<b>Preferred area for this product:</b> ${esc(areaName(task.site,pref.ref))}. The location list is filtered to it — pick a bin, or change the area below.`;
+      } else {
+        note.className = 'pref-note none';
+        note.innerHTML = `No preferred place set for this product at ${esc(dbName('sites',task.site))}. Use a suggestion above, scan a label, or pick any location.`;
+      }
+      $('area-filter').innerHTML = `<option value="">All areas (no filter)</option>` +
+        siteAreas(task.site).map(a=>`<option value="${a.code}" ${a.code===defaultArea?'selected':''}>${esc(a.name)}</option>`).join('');
+      rebuildLocSelect(task, preselectBin);
+    }
+    function rebuildLocSelect(task, preselectId){
+      const af = $('area-filter').value;
+      const list = af ? activeStorageAt(task.site).filter(l=>l.area===af) : activeAllAt(task.site);
+      $('loc-select').innerHTML = `<option value="">— select a location —</option>` +
+        list.map(x=>{
+          const tail = x.userRef || (x.area ? areaName(task.site,x.area) : x.type);
+          return `<option value="${x.id}" ${x.id===preselectId?'selected':''}>${esc(x.structured)} · ${esc(tail)}</option>`;
+        }).join('');
+      if (preselectId && list.some(x=>x.id===preselectId)){ const lc=loc(preselectId); if(lc)$('loc-scan').value=lc.structured; setChoiceById(preselectId); }
+    }
+    function onAreaFilter(){ if(cur) rebuildLocSelect(cur, ''); }
+
+    function printPutawayLabel(id){
+      const t = DB.lpns.find(x=>x.id===id); if (!t) return; const p = prod(t.product)||{};
+      printLabels([ labelHTML({ title:'PUTAWAY · LPN', code:t.id, lines:[
+        { k:'Product', v:prodName(t.product) }, { k:'Qty', v:`${t.qty} ${p.uom||''}` },
+        ...(t.lot ? [{ k:'Lot', v:t.lot }] : []), ...(t.expiry ? [{ k:'Expiry', v:t.expiry }] : []),
+        { k:'From', v:locName(t.loc) }, { k:'Scan to', v:'put away' } ]}) ], 'Putaway label · '+t.id);
+    }
+    // Mixed-pallet manifest label (mirrors pwa-gr-lpn.html ?pallet= — same engine + content).
+    function palletLabelHTML(plt){
+      const tot = palletTotals(plt);
+      const lines = [`Mixed pallet · ${tot.lines} products · ${tot.units} units${plt.asn?' · '+plt.asn:''}`].concat(
+        palletOpenLines(plt).map(ln => ({ k:(prod(ln.product)||{}).name || ln.product, v:`${ln.qty} ${(prod(ln.product)||{}).uom||''}` })));
+      return labelHTML({ title:`PALLET · ${plt.id}`, code:plt.id, lines });
+    }
+    function printPalletLabel(id){ const plt = palletById(id); if (plt) printLabels([palletLabelHTML(plt)], 'Pallet '+id); }
+
+    /* ---- read-only "already put away" progress (partial work, visible when you come back) ---- */
+    function progRow(t){
+      const p = prod(t.product)||{}, dest = loc(t.to);
+      return `<div class="prog-row">
+        <span class="q">${t.qty} ${esc(p.uom||'')}</span>
+        <span class="to">${esc(shortProd(t.product))} <span class="muted">→</span> <span class="mono">${esc(dest?dest.structured:locName(t.to))}</span> <span class="muted mono" style="font-weight:400">${esc(t.lpn)}</span></span>
+        <span class="meta2">${esc(t.ts||'')}${t.user?' · '+esc(t.user):''}</span>
+      </div>`;
+    }
+    function renderProgressPanel(task){
+      const el = $('d-progress'); if (!el) return;
+      const rowsHtml = ps => ps.slice().reverse().map(progRow).join('');   // newest first
+      if (task._pallet){
+        const plt = palletById(task.palletId), placements = putawaysFromSource(task.palletId);
+        if (!plt || !placements.length){ el.style.display='none'; el.innerHTML=''; return; }
+        const totalLines = plt.lines.length, openLines = palletOpenLines(plt).length, placedLines = totalLines - openLines;
+        el.style.display='';
+        el.innerHTML = `<div class="prog-head"><h3>📦 Partially decomposed</h3>
+            <span class="big">${placedLines} of ${totalLines} product line(s) placed</span>
+            <span class="muted" style="font-size:12px">${openLines} still to place · read-only history below</span></div>
+          <div class="prog-list">${rowsHtml(placements)}</div>`;
+      } else {
+        const prog = lpnPutawayProgress(task.id);
+        if (!prog){ el.style.display='none'; el.innerHTML=''; return; }
+        const p = prod(task.product)||{}, pct = prog.original ? Math.round(prog.placed/prog.original*100) : 0;
+        el.style.display='';
+        el.innerHTML = `<div class="prog-head"><h3>Partially put away</h3>
+            <span class="big">${prog.placed} of ${prog.original} ${esc(p.uom||'')} placed</span>
+            <div class="prog-bar"><i style="width:${pct}%"></i></div>
+            <span class="muted" style="font-size:12px"><b>${prog.remaining}</b> still on this plate</span></div>
+          <div class="prog-list">${rowsHtml(prog.placements)}</div>`;
+      }
+    }
+
+    /* ---- F9: expired stock cannot be put away to 'available' — force the reject (quarantine/damaged) path ---- */
+    // True when the task being placed (single plate OR the active mixed-pallet line) is past expiry.
+    function taskExpired(task){ return tracksExpiry(task.product) && isExpired(task); }
+    function renderExpiryBlock(task){
+      const el = $('d-expired'); if (!el) return;
+      if (!taskExpired(task)){ el.style.display='none'; el.innerHTML=''; return; }
+      const p = prod(task.product) || {};
+      const what = task._pallet ? 'this product line' : 'this plate';
+      el.style.display = '';
+      el.innerHTML = `<div class="eh"><span class="mark">⛔</span>
+          <h3>Expired stock — cannot be put away to available</h3></div>
+        <p><b>${esc(shortProd(task.product))}</b> on ${what} expired <b>${esc(task.expiry||'')}</b> (today is ${esc(WMS_TODAY)}). Expired goods must <b>not</b> enter available stock. Store / confirm is blocked — route the units to a blocked disposition via <b>⚠ Report damage / reject</b> above (Quarantine or Damaged).</p>
+        <div class="lots">Qty affected: <b>${task.qty} ${esc(p.uom||'')}</b>${tracksLot(task.product)&&task.lot?` · lot <b>${esc(task.lot)}</b>`:''}.</div>`;
+    }
+
+    function renderDetail(task){
+      const p = prod(task.product) || {};
+      const serial = !!(p.track && p.track.serial);
+      const from = loc(task.loc);
+      const lpnW = (task.qty * unitWeight(task.product)).toFixed(2);
+      const isPlt = !!task._pallet;
+      const plt = isPlt ? palletById(task.palletId) : null;
+      const total = plt ? plt.lines.length : 0;
+      const placed = plt ? (total - palletOpenLines(plt).length) : 0;
+
+      $('d-legend').textContent = isPlt ? 'Mixed pallet — place this product line' : 'License plate to put away';
+      $('d-title').textContent = isPlt
+        ? `Decompose ${task.palletId} — place ${prodName(task.product)}`
+        : `Put away ${task.id}`;
+      // scannable barcode — the LPN (single) or the pallet (decompose) — + print the matching label
+      $('d-bc').innerHTML = `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">`
+        + `${barcodeSVG(isPlt ? task.palletId : task.id,{height:40,module:1.5,font:10})}`
+        + (isPlt
+            ? `<button class="btn btn-sm btn-outline" onclick="printPalletLabel('${task.palletId}')">Print pallet label</button>`
+            : `<button class="btn btn-sm btn-outline" onclick="printPutawayLabel('${task.id}')">Print label</button>`)
+        + (isPlt ? `<div class="plt-manifest">${plt.lines.map((ln,i)=>{
+              const done=!(ln.qty>0), now=i===task.lineIdx && !done, open=!done && !now;
+              const qty = done ? '' : ` · ${ln.qty}`;
+              return `<span class="plt-chip ${done?'done':(now?'now':'open')}"${open?` onclick="switchPalletLine(${i})" title="Place this product next"`:''}>${esc(shortProd(ln.product))}${qty}${done?' ✓':''}</span>`;
+            }).join('')}</div>
+          <p class="plt-hint">Decompose in <b>any order</b> — tap a product chip above to place it next (e.g. start with the big items in front of you).</p>` : '')
+        + `</div>`;
+      $('d-summary').innerHTML = [
+        [isPlt?'Pallet':'LPN', isPlt?task.palletId:task.id],
+        ...(isPlt ? [['Pallet progress', `placing ${placed+1} of ${total} · ${palletOpenLines(plt).length} line(s) left`, true]] : []),
+        ['Client', dbName('clients', task.client)],
+        ['Site', dbName('sites', task.site)],
+        ['Product', prodName(task.product), true],
+        ['Tracking', testCaseNote(task.product) || trackingSummary(task.product), true],
+        ['Category', `${catName(p.category)}${p.subCategory?' · '+subCatName(p.subCategory):''}`, true],
+        ['Lot / Batch', task.lot || '—', tracksLot(task.product)],
+        ['Expiry', task.expiry || '—', tracksExpiry(task.product)],
+        ['Quantity', `${task.qty} ${p.uom || ''}`, true],
+        ['Unit / line weight', `${unitWeight(task.product)} kg · ${lpnW} kg`, true],
+        ['Serials', `${(task.serials||[]).join(', ') || task.qty + ' expected'}`, serial],
+        ['From', from ? `${from.structured} (${from.type})` : '—', true],
+      ].filter(r => r[2] !== false).map(([k,v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')
+        + `<div style="grid-column:1/-1">${photoField({ ref:(isPlt?task.palletId:task.id), level:'header', title:'Condition / damage photos (optional)' })}</div>`
+        + `<div style="grid-column:1/-1">${noteField({ ref:(isPlt?task.palletId:task.id), level:'header', title:'Putaway notes (optional)' })}</div>`;
+
+      // Assignee picker — dispatch this work to a person. The field lives on the REAL record:
+      // the pallet (for a mixed-pallet line, whose `cur` is synthetic) or the LPN itself.
+      const arec = assigneeRecord(task);
+      $('e-assignee').innerHTML = assigneePickerOptions(task.site, arec ? arec.assignee : '');
+
+      const dm = $('d-msg'); if (dm){ dm.style.display='none'; dm.innerHTML=''; }   // clear stale per-step message
+      renderExpiryBlock(task);          // F9: expired plate/line → prominent warning + block store-to-available
+      renderProgressPanel(task);        // read-only: what's ALREADY been put away from this plate / pallet
+      resetRejectPanel();               // damage-found reject control (single LPN + mixed-pallet line; collapsed by default)
+      renderQtyPanel();                 // qty-to-place input (default = full; less → split across bins)
+      renderSuggestions(effTask());     // ranked for the CURRENT placeQty; sets topSuggestionId + lastSuggCount
+      renderPlaceBlock(task);           // may pre-select a preferred location
+      // Pre-select the recommended VALID bin when nothing valid is chosen — including when the product's
+      // preferred home is full for the current qty after a split (renderPlaceBlock may pre-pick an over-cap home).
+      if ((!choice || (choice.v && choice.v.level==='error')) && topSuggestionId) setChoiceById(topSuggestionId);
+      manualMode = false;
+      applyMode();
+
+      // re-validate any existing choice against current policy
+      if (choice && choice.id) choice.v = validateChoice(choice.id);
+      renderChosen();
+    }
+
+    function renderSuggestions(task){
+      const { suggestions, excluded } = rankFor(task);
+      const top = suggestions.slice(0,4);
+      lastSuggCount = top.length;
+      topSuggestionId = top.length ? top[0].b.id : '';
+      $('suggs').innerHTML = top.length ? top.map((s,i) => {
+        const occ = s.cap.pl.units ? `Currently holds ${s.cap.pl.units.toLocaleString()} unit(s) / ${s.cap.pl.lpns} LPN(s)` : 'Currently empty';
+        return `<div class="sugg ${i===0?'rec':''}" data-bin="${s.b.id}" onclick="selectSuggestion('${s.b.id}')">
+          <div class="body">
+            ${i===0?'<span class="rec-flag">Recommended</span> ':''}<span class="sel-tag">✓ Selected</span>
+            <div><span class="loc mono">${esc(s.b.structured)}</span><span class="sysid mono">${esc(s.b.id)}</span></div>
+            <div class="head">${occ}${s.b.userRef?` · ${esc(s.b.userRef)}`:''} · <b>${esc(headroomTxt(s.b, task))}</b></div>
+            <div class="why">${s.tags.map(t=>`<span class="tag ${t.cls}">${esc(t.t)}</span>`).join('')}</div>
+          </div>
+        </div>`;
+      }).join('') : `<p class="muted">No bin fits <b>${placeQty}</b> unit(s)${cur && placeQty>1 ? ' — reduce the “Quantity to put away” above to <b>split across bins</b>, or' : ' —'} use “Assign manually”${cur && !cur._pallet ? ' or <b>park to overflow</b> below' : ''}.</p>`;
+
+      renderOverflowAction(top.length===0);   // F10: empty list → offer Park-to-overflow (single plates only)
+
+      $('excluded-wrap').innerHTML = excluded.length
+        ? `<div class="excluded"><div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Not offered (${excluded.length})</div>` +
+          excluded.slice(0,6).map(x => `<div class="x-row"><span class="loc mono">${esc(x.b.structured)}</span><span class="why">${esc(x.why)}</span></div>`).join('') +
+          `</div>`
+        : '';
+      return top.length;
+    }
+
+    /* ---- F10: no bin fits → park the plate to the overflow / staging bin (a legitimate action, not stuck) ---- */
+    // Only for single plates: parkToOverflow moves a to-putaway LPN. A mixed pallet isn't an LPN, so it can't park
+    // here — its operator switches/places the lines that DO fit instead.
+    function renderOverflowAction(empty){
+      const el = $('overflow-wrap'); if (!el) return;
+      if (!empty || !cur || cur._pallet || taskExpired(cur)){ el.style.display='none'; el.innerHTML=''; return; }
+      const dest = overflowLocFor(cur.site), dn = dest ? locName(dest) : '—';
+      el.style.display = '';
+      el.innerHTML = `<div class="chosen warn" style="margin-bottom:12px">
+          <span class="mark">⚠</span>
+          <div class="txt"><b>No bin fits this plate</b>
+            <small>Every candidate is full, frozen, or segregated. Reduce the quantity to split it, scan a bin manually, or <b>park it to overflow / staging</b> (${esc(dn)}) so it stays visible and resumable instead of stuck.</small></div>
+          <button class="btn btn-outline" onclick="parkLpnToOverflow()">Park to overflow / staging →</button>
+        </div>`;
+    }
+    function parkLpnToOverflow(){
+      if (!cur || cur._pallet) return;
+      const dest = parkToOverflow(cur.id, { user:'Benjamin Felix — Supervisor' });
+      if (!dest){ alert('Could not park — the plate is no longer awaiting putaway, or it is already in the overflow bin.'); return; }
+      const id = cur.id;
+      cur = null; choice = null;
+      $('pa-banner').innerHTML = `<b>${esc(id)}</b> parked to <span class="mono">${esc(locName(dest))}</span> — no bin fit it right now. It stays <b>to&nbsp;putaway</b> and reappears in the worklist to place once space frees up.`;
+      $('pa-banner').style.display = 'block';
+      renderList(); show('list');
+    }
+
+    /* ============================================================ CHOICE + VALIDATION */
+    function selectSuggestion(id){ setChoiceById(id); }
+    function applyScan(){
+      const raw = $('loc-scan').value.trim(); const l = resolveLoc(raw);
+      if (l){ $('loc-select').value = l.id; setChoiceById(l.id, raw); }
+      else { choice = { id:null, raw, v:{level:'error', msg:'Location not found. Scan or enter a valid System ID, structured code, or label.'} }; renderChosen(); }
+    }
+    function resolveLoc(raw){
+      const q = String(raw||'').trim().toLowerCase(); if (!q) return null;
+      return DB.locations.find(l => l.id.toLowerCase()===q || (l.structured||'').toLowerCase()===q || (l.userRef||'').toLowerCase()===q) || null;
+    }
+    function validateChoice(locId){
+      const l = loc(locId); if (!l) return { level:'error', msg:'Location not found.' };
+      if (l.site !== cur.site)    return { level:'error', msg:`${l.structured} belongs to ${dbName('sites',l.site)}, not ${dbName('sites',cur.site)} — putaway must stay within the LPN's site.`, loc:l };
+      if (l.status !== 'active')  return { level:'error', msg:`${l.structured} is inactive and can't receive stock.`, loc:l };
+      const fz = frozenTakeFor(l.id);
+      if (fz) return { level:'error', msg:`${l.structured} is inside a frozen stock-take (${fz.id}) — putaway is refused until it is posted or abandoned.`, loc:l };
+      if (l.type === 'storage'){
+        if (!segAllowed(l, cur)){ const zp=areaProfile(l.site,areaOf(l)); return { level:'error', msg:`${l.structured} is in an area reserved for ${dbName('clients',zp.owningClient)} — segregation is ON.`, loc:l }; }
+        const cap = capacity(l, effTask());
+        if (!cap.ok) return { level:'error', msg:`${l.structured} is over capacity for ${placeQty} unit(s): ${cap.fails.map(f=>`${f.dim} ${f.after}/${f.limit}`).join(', ')}. Reduce the quantity to split across bins.`, loc:l };
+        return { level:'ok', msg:`Valid storage location — ${headroomTxt(l, effTask())}.`, loc:l };
+      }
+      return { level:'warn', msg:`${l.structured} is a ${l.type} location, not a storage bin — allowed, but unusual for putaway.`, loc:l };
+    }
+    function setChoiceById(id, raw){ choice = { id, raw:raw||(loc(id)||{}).structured, v:validateChoice(id) }; renderChosen(); }
+
+    function renderChosen(){
+      const wrap = $('chosen-wrap');
+      const expired = cur && taskExpired(cur);   // F9: expired stock can never store to 'available'
+      const can = !expired && choice && choice.v && (choice.v.level==='ok' || choice.v.level==='warn');
+      if (expired){
+        wrap.innerHTML = `<div class="chosen error"><span class="mark">⛔</span>
+          <div class="txt"><b>Putaway blocked — expired stock</b><small>This ${cur._pallet?'line':'plate'} expired ${esc(cur.expiry||'')}. It cannot be stored to available — use <b>⚠ Report damage / reject</b> to route it to Quarantine or Damaged.</small></div></div>`;
+        document.querySelectorAll('.sugg').forEach(c => c.classList.toggle('sel', !!choice && c.dataset.bin === (choice||{}).id));
+        return;
+      }
+      if (!choice){
+        wrap.innerHTML = `<div class="chosen"><span class="mark">›</span>
+          <div class="txt"><b>No destination chosen yet</b><small>Tap a suggested card, or use “Assign manually”.</small></div></div>`;
+      } else {
+        const v = choice.v, l = v.loc;
+        const mark = v.level==='ok' ? '✓' : v.level==='warn' ? '⚠' : '✕';
+        const full = cur ? cur.qty : 0, partial = cur && placeQty < full;
+        const label = (cur && cur._pallet)
+          ? `Place ${placeQty} ${esc(shortProd(cur.product))}${partial?' (split)':''}`
+          : (partial ? `Place ${placeQty} (split)` : 'Confirm putaway');
+        wrap.innerHTML = `<div class="chosen ${v.level}">
+          <span class="mark">${mark}</span>
+          <div class="txt">
+            ${l ? `<b>${esc(l.structured)} <span class="muted mono" style="font-weight:400">${esc(l.id)}</span></b>` : `<b>${esc(choice.raw||'—')}</b>`}
+            <small>${esc(v.msg)}</small>
+          </div>
+          ${can ? `<button class="btn btn-primary" onclick="confirmPutaway()">${label}</button>` : ''}
+        </div>`;
+      }
+      // reflect the current choice on the suggestion cards
+      document.querySelectorAll('.sugg').forEach(c => c.classList.toggle('sel', !!choice && c.dataset.bin === choice.id));
+    }
+
+    /* ---- quantity-to-place panel (default = full; less than full splits across bins) ---- */
+    function renderQtyPanel(){
+      const inp = $('place-qty'); if (!inp || !cur) return;
+      inp.max = cur.qty; inp.value = placeQty;
+      updateQtyNote();
+    }
+    function updateQtyNote(){
+      const note = $('qty-note'); if (!note || !cur) return;
+      const full = cur.qty, p = prod(cur.product) || {};
+      note.innerHTML = placeQty >= full
+        ? `Placing the whole ${cur._pallet?'line':'plate'} (<b>${full}</b> ${esc(p.uom||'unit(s)')}).`
+        : `Split — <b>${placeQty}</b> here; the remaining <b>${full-placeQty}</b> ${cur._pallet?'stays on the pallet line':'becomes a new putaway task'}.`;
+    }
+    function onQtyChange(){
+      if (!cur) return;
+      let v = Math.floor(Number($('place-qty').value)||0);
+      if (v < 1) v = 1; if (v > cur.qty) v = cur.qty;
+      $('place-qty').value = v; placeQty = v;
+      updateQtyNote();
+      renderSuggestions(effTask());                   // re-rank: a smaller qty may now fit more bins
+      if (!choice && topSuggestionId) setChoiceById(topSuggestionId);
+      else if (choice && choice.id){ choice.v = validateChoice(choice.id); renderChosen(); }
+      applyMode();
+    }
+    // Per-step feedback wherever the operator now is: in-detail (still placing) or the list banner (done).
+    function putawayFeedback(html){
+      if ($('view-detail').style.display !== 'none'){ const m=$('d-msg'); if(m){ m.innerHTML=html; m.style.display='block'; window.scrollTo(0,0); } }
+      else { const b=$('pa-banner'); b.innerHTML=html; b.style.display='block'; }
+    }
+
+    /* ---- damage found at putaway: reject a sub-qty to a blocked disposition (single LPN only) ---- */
+    // Reasons follow the disposition, pulled live from Master Data › Reason Codes (the 'status' domain).
+    function fillRejReasons(preserve){
+      const sel = $('rej-reason'); if (!sel) return;
+      const prev = preserve ? sel.value : '';
+      const list = reasonsFor('status', $('rej-disp').value);
+      sel.innerHTML = '<option value="">— select —</option>' +
+        list.map(r => `<option${r===prev?' selected':''}>${esc(r)}</option>`).join('');
+    }
+    function resetRejectPanel(){
+      const panel = $('reject-panel'); if (!panel) return;
+      panel.style.display = '';                       // F12: shown for single plates AND mixed-pallet lines
+      $('reject-body').style.display = 'none';
+      $('reject-toggle').textContent = '⚠ Report damage / reject';
+      $('rej-qty').value = ''; $('rej-qty').max = cur ? cur.qty : '';
+      $('rej-disp').value = 'quarantine'; fillRejReasons(false);
+      updateRejNote();
+    }
+    function toggleReject(){
+      const body = $('reject-body'), open = body.style.display === 'none';
+      body.style.display = open ? '' : 'none';
+      $('reject-toggle').textContent = open ? '✕ Cancel reject' : '⚠ Report damage / reject';
+    }
+    function updateRejNote(){
+      const note = $('rej-note'); if (!note || !cur) return;
+      let q = Math.floor(Number($('rej-qty').value)||0); const full = cur.qty, p = prod(cur.product) || {}, u = p.uom || 'unit(s)';
+      if (q < 1){ note.textContent = ''; return; }
+      if (q > full) q = full;
+      note.innerHTML = q >= full
+        ? `Rejecting the whole plate (<b>${full}</b> ${esc(u)}) — nothing left to put away.`
+        : `Rejecting <b>${q}</b> ${esc(u)} → <b>${full - q}</b> ${esc(u)} remain on the plate to put away.`;
+    }
+    function confirmReject(){
+      if (!cur) return;
+      let q = Math.floor(Number($('rej-qty').value)||0);
+      if (q < 1){ alert('Enter how many units to reject.'); return; }
+      if (q > cur.qty) q = cur.qty;
+      const disp = $('rej-disp').value, reason = $('rej-reason').value;
+      if (!reason){ alert('A reason is required to reject units.'); return; }
+      const p = prod(cur.product) || {}, u = p.uom || '';
+
+      // ----- F12: mixed-pallet LINE reject — peel damaged units off this line to a blocked disposition -----
+      if (cur._pallet){
+        const palletId = cur.palletId, lineIdx = cur.lineIdx, prodName2 = shortProd(cur.product);
+        const res = palletLineReject(palletId, lineIdx, q, { disposition:disp, reason, user:'Benjamin Felix — Supervisor' });
+        if (!res){ alert('Could not reject — that pallet line is no longer open.'); choice=null; openNextPalletLine(); return; }
+        const rejPlate = lpnById(res.rejectedId);
+        const where = disp === 'hold' ? 'Hold' : `${disp === 'damaged' ? 'Damaged' : 'Quarantine'} (${locName(rejPlate ? rejPlate.loc : '')})`;
+        const msg = `<b>${esc(palletId)}</b>: <b>${res.rejected}</b> ${esc(u)} of <b>${esc(prodName2)}</b> rejected → <b>${esc(where)}</b> as <span class="mono">${esc(res.rejectedId)}</span> (${esc(reason)}) — excluded from stock.${res.remaining>0?` <b>${res.remaining}</b> of this product still on the pallet to place.`:''}`;
+        choice = null;
+        openNextPalletLine();                         // re-opens the same line if a remainder remains, else advances/finishes
+        if ($('view-detail').style.display !== 'none') putawayFeedback(msg);   // still decomposing → show in detail (else the completion banner stands)
+        return;
+      }
+
+      // ----- single LPN reject -----
+      const res = putawayReject(cur.id, q, { disposition:disp, reason, user:'Benjamin Felix — Supervisor' });
+      if (!res){ alert('Could not reject — the plate is no longer awaiting putaway.'); renderList(); show('list'); return; }
+      const rejPlate = lpnById(res.rejectedId);
+      const where = disp === 'hold' ? 'Hold' : `${disp === 'damaged' ? 'Damaged' : 'Quarantine'} (${locName(rejPlate ? rejPlate.loc : '')})`;
+      if (res.good === 0){                            // whole plate rejected → nothing left to put away
+        $('pa-banner').innerHTML = `<b>${esc(cur.id)}</b> fully rejected — <b>${res.rejected}</b> ${esc(u)} of <b>${esc(shortProd(cur.product))}</b> routed to <b>${esc(where)}</b> (${esc(reason)}). Excluded from available stock; nothing to put away.`;
+        $('pa-banner').style.display = 'block';
+        cur = null; choice = null; renderList(); show('list'); return;
+      }
+      // partial → re-render the detail on the reduced GOOD remainder (cur.qty was decremented), keep placing
+      placeQty = cur.qty; choice = null;
+      renderDetail(cur); show('detail');
+      putawayFeedback(`<b>${res.rejected}</b> ${esc(u)} rejected → <b>${esc(where)}</b> as <span class="mono">${esc(res.rejectedId)}</span> (${esc(reason)}) — excluded from stock. <b>${res.good}</b> ${esc(u)} remain on <span class="mono">${esc(cur.id)}</span> to put away.`);
+    }
+
+    function confirmPutaway(){
+      if (!cur || !choice || !choice.v || choice.v.level==='error') return;
+      if (taskExpired(cur)){ alert('Blocked — expired stock cannot be put away to available. Route it to Quarantine or Damaged via “Report damage / reject”.'); return; }   // F9
+      const dest = choice.v.loc;
+      const fz = frozenTakeFor(dest.id);             // re-validate at COMMIT (state can change after the form opened)
+      if (fz){ alert(`Blocked — ${dest.structured} is now inside a frozen stock-take (${fz.id}). Putaway refused until it is unfrozen.`); return; }
+      const q = Math.min(Math.max(1, Math.floor(placeQty)||0), cur.qty);
+      const p = prod(cur.product) || {};
+
+      // ----- mixed-pallet decomposition: place this line (whole OR partial) → child LPN, then stay/advance -----
+      if (cur._pallet){
+        const v = validateChoice(dest.id);           // re-assert shared guards against LIVE stock at commit
+        if (v.level === 'error'){ alert(v.msg); return; }
+        const palletId = cur.palletId, lineIdx = cur.lineIdx, prodName2 = shortProd(cur.product);
+        const newId = decomposePalletLine(palletId, lineIdx, dest.id,
+          { qty:q, user:'Benjamin Felix — Supervisor', note:`Putaway (pallet ${palletId}) → ${dest.structured}` });
+        if (!newId){ alert('That pallet line is no longer open — refreshing.'); choice=null; openNextPalletLine(); return; }
+        const pl = palletById(palletId); const left = (pl && pl.lines[lineIdx]) ? pl.lines[lineIdx].qty : 0;
+        const msg = `<b>${esc(palletId)}</b>: ${q} ${esc(p.uom||'unit(s)')} of <b>${esc(prodName2)}</b> placed at <span class="mono">${esc(dest.structured)}</span> as <span class="mono">${esc(newId)}</span>${left>0?` · <b>${left}</b> of this product still to place`:''}.`;
+        choice = null;
+        openNextPalletLine();                         // re-opens the same line if a remainder remains, else advances/finishes
+        if ($('view-detail').style.display !== 'none') putawayFeedback(msg);   // still decomposing → show in detail (else the completion banner stands)
+        return;
+      }
+
+      // ----- single LPN (whole OR partial split-across-bins) -----
+      const v = validateChoice(dest.id); if (v.level === 'error'){ alert(v.msg); return; }
+      // Omit ref → putawayPlace defaults a PARTIAL child's ref to the source LPN id (genealogy link for the
+      // partial-progress UX); a whole-plate placement still records ref:'putaway'.
+      const res = putawayPlace(cur.id, dest.id, q, { user:'Benjamin Felix — Supervisor', note:`Putaway → ${dest.structured}` });
+      if (!res){ alert('Could not place — the plate is no longer awaiting putaway.'); cur=null; choice=null; renderList(); show('list'); return; }
+      if (res.remainder > 0){                         // partial → stay on the (decremented) plate to place the rest
+        choice = null; placeQty = cur.qty;            // cur.qty was decremented by putawayPlace
+        renderDetail(cur); show('detail');
+        putawayFeedback(`${q} ${esc(p.uom||'unit(s)')} of <b>${esc(shortProd(cur.product))}</b> placed at <span class="mono">${esc(dest.structured)}</span> as <span class="mono">${esc(res.placedId)}</span> — now <b>available</b>. <b>${res.remainder}</b> still on <span class="mono">${esc(cur.id)}</span>; choose the next bin.`);
+        return;
+      }
+      $('pa-banner').innerHTML = `<b>${esc(cur.id)}</b> put away to <span class="mono">${esc(dest.structured)}</span> <span class="muted mono">(${esc(dest.id)})</span>. ${q} ${esc(p.uom||'unit(s)')} of <b>${esc(shortProd(cur.product))}</b> are now <b>available</b> for outbound. Recorded to the transaction history.`;
+      $('pa-banner').style.display = 'block';
+      cur = null; choice = null;
+      renderList(); show('list');
+    }
+
+    // The REAL record that carries the assignee for the current task: the pallet for a mixed-pallet line
+    // (its `cur` is synthetic and rebuilt per line), else the to-putaway LPN itself.
+    function assigneeRecord(task){
+      if (!task) return null;
+      return task._pallet ? palletById(task.palletId) : lpnById(task.id);
+    }
+    // Dispatch picker changed — persist immediately onto the real plate/pallet (no single Save button here;
+    // a pallet line's `cur` is synthetic and auto-advances), then refresh the lists so chips update.
+    function onAssigneeChange(){
+      if (!cur) return;
+      const rec = assigneeRecord(cur);
+      if (rec) rec.assignee = $('e-assignee').value || undefined;
+    }
+
+    function openPutaway(id){
+      const l = DB.lpns.find(x=>x.id===id); if (!l) return;
+      curPallet = null; cur = l; choice = null; placeQty = l.qty; $('loc-scan').value = '';
+      renderDetail(l); show('detail');
+    }
+
+    /* ---- mixed-pallet decomposition driver: operator chooses which open line to place next ---- */
+    function openPallet(id){
+      const p = palletById(id); if (!p || p.status!=='to-putaway') return;
+      curPallet = id; cur = null; choice = null;
+      openNextPalletLine();            // opens the first open line; the manifest chips let the operator switch to any other
+    }
+    // Open ONE specific pallet line for placement (used by the auto-advance AND the clickable manifest chips).
+    function openPalletLineByIndex(p, idx){
+      const ln = p.lines[idx]; if (!ln || !(ln.qty>0)) return;
+      cur = { id:p.id, _pallet:true, palletId:p.id, lineIdx:idx, site:p.site, client:p.client,
+        product:ln.product, qty:ln.qty, lot:ln.lot||'', expiry:ln.expiry||'', serials:(ln.serials||[]).slice(), loc:p.loc };
+      choice = null; placeQty = cur.qty; $('loc-scan').value = '';
+      renderDetail(cur); show('detail');
+    }
+    // Operator taps a different product chip → switch the active line (any order). No commit happens here.
+    function switchPalletLine(idx){
+      const p = palletById(curPallet); if (!p || p.status!=='to-putaway') return;
+      const ln = p.lines[idx]; if (!ln || !(ln.qty>0)) return;   // ignore already-placed lines
+      openPalletLineByIndex(p, idx);
+    }
+    function openNextPalletLine(){
+      const p = palletById(curPallet);
+      if (!p || p.status !== 'to-putaway'){
+        if (p && p.status === 'closed'){
+          $('pa-banner').innerHTML = `Pallet <b>${esc(p.id)}</b> fully decomposed — every product is now live stock at its bin. Recorded to the transaction history.`;
+          $('pa-banner').style.display = 'block';
+        }
+        curPallet = null; cur = null; choice = null;
+        renderList(); show('list'); return;
+      }
+      // Prefer to stay on the line the operator was just on (e.g. a remainder still open); else the first open line.
+      let idx = (cur && cur._pallet && (p.lines[cur.lineIdx]||{}).qty>0) ? cur.lineIdx : p.lines.findIndex(l => (l.qty||0) > 0);
+      if (idx < 0){ p.status = 'closed'; curPallet = null; cur = null; renderList(); show('list'); return; }
+      openPalletLineByIndex(p, idx);
+    }
+
+    /* ---- view toggle + filter ---- */
+    function show(v){
+      $('view-list').style.display   = v==='list'   ? '' : 'none';
+      $('view-detail').style.display = v==='detail' ? '' : 'none';
+      window.scrollTo(0,0);
+    }
+    function toggleFilter(btn){
+      const f = $('filters'); const hidden = f.style.display==='none';
+      f.style.display = hidden ? '' : 'none'; btn.textContent = hidden ? 'Hide filter' : 'Show filter';
+    }
+
+    /* ---- destination mode (suggestions ⇄ manual) ---- */
+    function applyMode(){
+      const hasSugg = lastSuggCount > 0;
+      const showManual = manualMode || !hasSugg;
+      $('mode-toggle').style.display = hasSugg ? '' : 'none';
+      $('mode-suggest').style.display = showManual ? 'none' : '';
+      $('mode-manual').style.display  = showManual ? '' : 'none';
+      $('mode-toggle').textContent = manualMode ? '← Back to suggestions' : 'Assign manually →';
+    }
+    function toggleMode(){ manualMode = !manualMode; applyMode(); }
+
+    /* ---- init ---- */
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-site').innerHTML   = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-assignee').innerHTML = assigneeFilterOptions('', state.assignee);
+    $('f-client').addEventListener('change', e => { state.client=e.target.value; renderList(); });
+    $('f-site').addEventListener('change',   e => { state.site=e.target.value; renderList(); });
+    $('f-lpn').addEventListener('input',  e => { state.filterLpn=e.target.value.trim().toLowerCase(); renderList(); });
+    $('f-prod').addEventListener('input', e => { state.filterProd=e.target.value.trim().toLowerCase(); renderList(); });
+    $('f-assignee').addEventListener('change', e => { state.assignee=e.target.value; renderList(); });
+    $('loc-scan').addEventListener('change', applyScan);
+    $('place-qty').addEventListener('change', onQtyChange);
+    $('loc-select').addEventListener('change', e => { if(e.target.value){ const l=loc(e.target.value); if(l)$('loc-scan').value=l.structured; setChoiceById(e.target.value); } });
+    $('seg-toggle').addEventListener('change', e => {
+      DB.settings.clientAreaSegregation = e.target.checked; paintSeg();
+      if ($('view-detail').style.display !== 'none' && cur) renderDetail(cur); else renderList();
+    });
+
+    paintSeg();
+    renderList();
+  </script>
+</body></html>

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scanner — WMS</title>
+  <link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Tasks" data-pwa-back="none" data-pwa-assignable="1">
+  <div id="page-content">
+    <p class="scan-hint" style="text-align:left;margin:0 0 12px">Pick a task — each flow is scan-first.</p>
+    <div id="hub"></div>
+    <div class="spacer"></div>
+    <p class="scan-hint" style="text-align:left;margin-left:2px">Lookups</p>
+    <div class="btn-row">
+      <a class="btn btn-outline" href="pwa-md-lookup-loc.html"  style="flex:1;width:auto;text-align:center">Location</a>
+      <a class="btn btn-outline" href="pwa-md-lookup-prod.html" style="flex:1;width:auto;text-align:center">Product</a>
+    </div>
+    <p class="scan-hint" style="text-align:left;margin-left:2px">Labels</p>
+    <div class="btn-row">
+      <a class="btn btn-outline" href="pwa-gr-reprint.html" style="flex:1;width:auto;text-align:center">Reprint a label (LPN / pallet)</a>
+    </div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const site = PWA.ctx.siteId, client = PWA.ctx.clientId;
+
+    // Live counts from the session DB, scoped to the current client + site.
+    // "My tasks" (PWA.mineOnly()) narrows every count to records assigned to the current user (isMine).
+    const mine = x => !PWA.mineOnly() || isMine(x);
+    const openAsns   = DB.asns.filter(a => a.site===site && a.client===client && asnStatus(a)!=='closed' && mine(a)).length;
+    const inspect    = DB.lpns.filter(l => l.site===site && l.client===client && l.status==='to-inspect' && mine(l)).length;
+    const putaway    = DB.lpns.filter(l => l.site===site && l.client===client && l.status==='to-putaway' && mine(l)).length + palletsAtSite(site, client).filter(mine).length;
+    const pick       = DB.outbound.filter(o => o.site===site && o.client===client && ['open','allocated','partial','picking','picked'].includes(o.status) && mine(o)).length;
+    const countTasks = DB.counts.filter(c => c.site===site && c.status==='pending-approval' && mine(c)).length
+                     + DB.physicals.filter(p => p.site===site && p.status!=='closed' && mine(p)).length;
+
+    // Flows go live phase-by-phase. Receive + Inspection (Phase 1) and Put away (Phase 2) are live;
+    // the remaining task flows light up (become tappable) as each later phase lands.
+    // Phase-5 task counts (scoped to the current client + site).
+    const toShip   = DB.transfers.filter(t=>t.client===client && t.fromSite===site && t.status==='draft' && mine(t)).length;
+    const toRecv   = DB.transfers.filter(t=>t.client===client && t.toSite===site && t.status==='in-transit' && mine(t)).length;
+    const openTakes= DB.physicals.filter(p=>p.site===site && (p.status==='open'||p.status==='frozen') && mine(p)).length;
+    const openRets = DB.returns.filter(r=>r.site===site && r.client===client && r.status==='open' && mine(r)).length;
+    const openRtvs = (DB.rtvs||[]).filter(r=>r.site===site && r.status==='open' && mine(r)).length;
+    const toDispose= DB.lpns.filter(l=>l.site===site && l.client===client && (l.qty||0)>0 && (isBlocked(l.status)||isExpired(l)) && mine(l)).length;
+
+    const LIVE = new Set(['receive','inspect','putaway','pick','dispatch','rtv','move','count','transfer','physical','repack','returns','dispose']);
+
+    const TILES = [
+      { key:'receive', file:'pwa-gr-receive.html',  title:'Receive',         sub:'Inbound — ASN or blind',   badge:openAsns,   cls:'b-toputaway' },
+      { key:'inspect', file:'pwa-gr-inspect.html',  title:'Inspect',         sub:'Quality decision on holds',badge:inspect,    cls:'b-allocated' },
+      { key:'putaway', file:'pwa-pa-putaway.html',  title:'Put away',        sub:'LPNs & pallets from staging', badge:putaway, cls:'b-toputaway' },
+      { key:'pick',    file:'pwa-so-pick.html',     title:'Pick / Dispatch', sub:'Outbound picking',         badge:pick,       cls:'b-allocated' },
+      { key:'dispatch',file:'pwa-so-dispatch.html', title:'Ad-hoc dispatch', sub:'Emergency — no ERP order',  badge:0,          cls:'' },
+      { key:'rtv',     file:'pwa-so-rtv.html',      title:'Return to vendor', sub:'Ship stock back to supplier/client', badge:openRtvs, cls:'b-allocated' },
+      { key:'move',    file:'pwa-inv-move.html',    title:'Move',            sub:'Relocate within the site', badge:0,          cls:'' },
+      { key:'transfer',file:'pwa-inv-transfer.html',title:'Transfers',       sub:'Inter-site ship / receive',badge:toShip+toRecv, cls:'b-allocated' },
+      { key:'count',   file:'pwa-inv-count.html',   title:'Count',           sub:'Cycle counts',             badge:countTasks, cls:'b-toputaway' },
+      { key:'physical',file:'pwa-inv-physical.html',title:'Physical inventory', sub:'Freeze · count · reconcile', badge:openTakes, cls:'b-toputaway' },
+      { key:'repack',  file:'pwa-inv-repack.html',  title:'Repack / Re-kit', sub:'Split · merge · repack',   badge:0,          cls:'' },
+      { key:'returns', file:'pwa-inv-returns.html', title:'Returns / Put-back', sub:'Re-enter & disposition', badge:openRets,   cls:'b-allocated' },
+      { key:'dispose', file:'pwa-inv-dispose.html', title:'Disposal / Scrap', sub:'Flag blocked stock for scrap', badge:toDispose, cls:'b-quarantine' },
+    ];
+
+    function tile(t){
+      const live  = LIVE.has(t.key);
+      const badge = t.badge ? `<span class="badge ${t.cls}">${t.badge}</span>` : '';
+      const sub   = esc(t.sub) + (live ? '' : ' · soon');
+      const inner = `<span class="meta"><b>${esc(t.title)}</b><small>${sub}</small></span>${badge}`;
+      return live ? `<a class="task" href="${t.file}">${inner}</a>`
+                  : `<div class="task is-soon">${inner}</div>`;
+    }
+    document.getElementById('hub').innerHTML = TILES.map(tile).join('');
+  })();
+  </script>
+</body>
+</html>

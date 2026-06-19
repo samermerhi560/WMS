@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Repack / Split / Merge / Re-kit — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="inv-repack" data-erp-title="Inventory Ops"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Inventory Ops › Repack / Re-kit">
+  <div id="page-content">
+
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); }
+      .tag.tag-info { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .mode-pick { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+      .mode-card { flex:1; min-width:170px; border:1.5px solid var(--line); border-radius:var(--radius); padding:10px 12px; cursor:pointer; background:var(--white); }
+      .mode-card:hover { background:var(--fill); } .mode-card.on { border-color:var(--brand); background:var(--brand-tint); }
+      .mode-card b { display:block; } .mode-card small { color:var(--ink-soft); font-size:11.5px; }
+      table.ln { width:100%; border-collapse:collapse; margin:6px 0 10px; }
+      table.ln th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); border-bottom:1.5px solid var(--line); padding:5px 8px; }
+      table.ln td { padding:6px 8px; border-bottom:1px solid var(--line-soft); font-size:13px; vertical-align:middle; }
+      table.ln .num { text-align:right; } table.ln input, table.ln select { max-width:150px; }
+      table.ln input[type=number]{ max-width:90px; }
+      .bal { font-size:12.5px; padding:8px 12px; border-radius:var(--radius); margin:6px 0 12px; }
+      .bal.ok { background:#e6f3e7; border:1px solid #6fae72; color:#235c25; }
+      .bal.bad{ background:#f6e7e7; border:1px solid #c47e7e; color:#7a2c2c; }
+      .pick-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; } .pick-row .field { margin-bottom:0; }
+      .act-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; } .act-bar .right { margin-left:auto; display:flex; gap:8px; }
+      .req-note { font-size:12px; color:var(--ink-soft); }
+      .arrow { text-align:center; color:var(--ink-faint); font-size:18px; margin:2px 0; }
+      .frz-note { font-size:12.5px; padding:8px 12px; border-radius:var(--radius); margin:6px 0 10px;
+        border:1px solid #c47e7e; background:#f6e7e7; color:#7a2c2c; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+      <div class="page-head"><h1>Repack / Split / Merge / Re-kit</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn btn-primary" onclick="openNew()">+ New job</button></div>
+      </div>
+      <p class="sub"><b>Split</b> one plate into several · <b>Merge</b> partial plates of the same lot into one ·
+        <b>Repack</b> to a new packaging/UoM · <b>Re-kit</b> assemble or break down kits. Source stock is
+        <b>consumed</b> and new plate(s) are <b>created</b>, carrying lot/expiry/serial genealogy. Each job is audited.</p>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site</span><select id="f-site"></select></label>
+          <label class="field"><span>Since date <span class="req">*</span></span><input type="date" id="f-since"></label>
+          <label class="field"><span>Kind</span><select id="f-kind">
+            <option value="all">All kinds</option><option value="split">Split</option><option value="merge">Merge</option>
+            <option value="repack">Repack</option><option value="rekit">Re-kit</option></select></label>
+          <label class="field"><span>Product / LPN / ID</span><input id="f-q" placeholder="Search…"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:28px">⚙</th><th>ID</th><th>Date</th><th>Kind</th><th>Product</th>
+          <th>Sources → Outputs</th><th>By</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== CREATE ===================== -->
+    <div id="view-form" style="display:none">
+      <div class="page-head"><h1 id="form-title">New job</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+
+      <div class="mode-pick">
+        <div class="mode-card" id="m-split"  onclick="setKind('split')"><b>Split</b><small>1 plate → several</small></div>
+        <div class="mode-card" id="m-merge"  onclick="setKind('merge')"><b>Merge</b><small>several → 1 (same lot)</small></div>
+        <div class="mode-card" id="m-repack" onclick="setKind('repack')"><b>Repack</b><small>new packaging / UoM</small></div>
+        <div class="mode-card" id="m-rekit"  onclick="setKind('rekit')"><b>Re-kit</b><small>assemble / break down</small></div>
+      </div>
+
+      <div class="panel">
+        <fieldset><legend>Source plate(s) — consumed</legend>
+          <div class="pick-row">
+            <label class="field"><span>Site</span><select id="s-site"></select></label>
+            <label class="field" style="flex:3"><span id="src-lbl">Plate (LPN)</span><select id="s-pick"></select></label>
+            <button class="btn btn-outline btn-sm" id="src-add" onclick="addSource()">Add source</button>
+          </div>
+          <table class="ln" id="src-tbl"></table>
+        </fieldset>
+
+        <div class="arrow">▼</div>
+
+        <fieldset><legend>Output plate(s) — created</legend>
+          <div id="out-tools"></div>
+          <table class="ln" id="out-tbl"></table>
+          <div class="frz-note" id="frz-note" style="display:none"></div>
+          <div class="bal" id="bal"></div>
+        </fieldset>
+
+        <fieldset><legend>Before / after evidence</legend>
+          <div id="job-photos"></div>
+          <div id="job-notes" style="margin-top:10px"></div>
+          <p class="req-note">Optional — attach before/after photos of the plate(s). Carried onto the job record.</p>
+        </fieldset>
+
+        <div class="act-bar">
+          <span class="req-note" id="form-hint"></span>
+          <span class="right"><button class="btn btn-outline" onclick="show('list')">Cancel</button>
+            <button class="btn btn-primary" id="confirm-btn" onclick="confirmJob()">Confirm job</button></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== REVIEW ===================== -->
+    <div id="view-review" style="display:none">
+      <div class="page-head"><h1 id="rev-title">Job</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Back</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Job</legend><div class="sum-grid" id="rev-summary"></div></fieldset>
+        <fieldset><legend>Consumed</legend><table class="ln" id="rev-src"></table></fieldset>
+        <fieldset><legend>Created</legend><table class="ln" id="rev-out"></table></fieldset>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-16';
+    const KIND_LABEL = { split:'Split', merge:'Merge', repack:'Repack', rekit:'Re-kit' };
+
+    const SINCE_DEFAULT = '2026-05-17';   // 30 days before mock "today" (2026-06-16) — caps how far back the job history loads
+    const state = { site:'S-LYON', kind:'all', q:'', since:SINCE_DEFAULT };
+    let kind='split', sources=[], outputs=[], draftRef='';   // working job (draftRef = stable photo ref for the unsaved job)
+    // Every repack job is a completed (historical) record → the Since date is always mandatory here (no "open" jobs to protect).
+
+    const storLocs = site => DB.locations.filter(l=>l.site===site && l.type==='storage' && l.status==='active');
+    const srcQty = () => sources.reduce((s,x)=>s+x.qty,0);
+    const outQty = () => outputs.reduce((s,o)=>s+(+o.qty||0),0);
+
+    /* ============================================================ LIST */
+    function renderList(){
+      if (!state.since){ $('rows').innerHTML=`<tr><td colspan="8" class="muted" style="padding:18px">Set a <b>Since date</b> above to load the job history (bounded for performance).</td></tr>`; $('list-summary').textContent=''; return; }
+      const list = DB.repacks.filter(r=>{
+        if (r.site!==state.site) return false;
+        if ((r.created||'') < state.since) return false;
+        if (state.kind!=='all' && r.kind!==state.kind) return false;
+        if (state.q){ const hay=`${r.id} ${r.sources.concat(r.outputs).map(x=>x.lpn+' '+prodName(x.product)).join(' ')}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+        return true;
+      }).sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+      $('rows').innerHTML = list.length ? list.map(r=>`<tr><td class="dots">⋮</td>
+        <td class="mono"><a href="#" onclick="openRev('${r.id}');return false">${r.id}</a></td>
+        <td>${esc(r.created)}</td><td><span class="tag tag-info">${esc(KIND_LABEL[r.kind]||r.kind)}</span></td>
+        <td>${esc(prodName(r.sources[0]&&r.sources[0].product))}</td>
+        <td class="mono">${r.sources.length} plate(s) → ${r.outputs.length} plate(s)</td>
+        <td>${esc(r.by||'—')}</td><td><a href="#" onclick="openRev('${r.id}');return false">View</a></td></tr>`).join('')
+        : `<tr><td colspan="8" class="muted" style="padding:18px">No jobs at ${dbName('sites',state.site)}.</td></tr>`;
+      $('list-summary').textContent = `${list.length} job(s) at ${dbName('sites',state.site)}`;
+    }
+
+    /* ============================================================ CREATE */
+    function openNew(){ sources=[]; outputs=[]; draftRef='RPK-DRAFT-'+Date.now(); $('s-site').value=state.site; show('form'); setKind('split');
+      $('job-photos').innerHTML = photoField({ ref:draftRef, level:'header', title:'Before / after photos (optional)' });
+      $('job-notes').innerHTML = noteField({ ref:draftRef, level:'header', title:'Job notes (optional)' }); }
+    function setKind(k){
+      kind=k; sources=[]; outputs=[];
+      ['split','merge','repack','rekit'].forEach(x=>$('m-'+x).classList.toggle('on',x===k));
+      $('form-title').textContent = 'New '+KIND_LABEL[k].toLowerCase()+' job';
+      $('src-lbl').textContent = (k==='merge'||k==='rekit') ? 'Add a plate' : 'Plate (LPN)';
+      $('src-add').style.display = (k==='split'||k==='repack') ? 'none' : '';
+      const hints={ split:'Split one plate into several smaller plates of the same product & lot. Outputs must not exceed the source; any remainder stays on the source plate.',
+        merge:'Merge plates of the SAME product, lot and expiry into one consolidated plate. All sources are consumed.',
+        repack:'Repack a plate into a new packaging/UoM. Quantity and genealogy are unchanged; the old plate is consumed and a new one created.',
+        rekit:'Assemble component plates into a kit, or break a kit into components. Define the output plate(s) freely.' };
+      $('form-hint').textContent = hints[k];
+      fillPick(); renderSources(); seedOutputs(); renderOutputs();
+    }
+    function pickCandidates(){
+      const site=$('s-site').value;
+      let list = DB.lpns.filter(l=>l.site===site && l.status==='available' && (l.qty||0)>0 && !sources.find(s=>s.lpn===l.id));
+      if (kind==='merge' && sources.length){ const f=lpnById(sources[0].lpn); list=list.filter(l=>l.product===f.product && (l.lot||'')===(f.lot||'') && (l.expiry||'')===(f.expiry||'')); }
+      return list;
+    }
+    function fillPick(){
+      const list=pickCandidates();
+      $('s-pick').innerHTML = list.length? list.map(l=>`<option value="${l.id}">${l.id} — ${esc(prodName(l.product))} · ${l.qty}${l.lot?' · '+esc(l.lot):''} @ ${esc(locName(l.loc))}</option>`).join('')
+        : `<option value="">— no eligible plates —</option>`;
+    }
+    function addSource(){ const l=lpnById($('s-pick').value); if(!l) return; pushSource(l); }
+    function pushSource(l){
+      sources.push({ lpn:l.id, product:l.product, qty:l.qty, lot:l.lot||'', expiry:l.expiry||'', loc:l.loc });
+      fillPick(); renderSources(); seedOutputs(); renderOutputs();
+    }
+    function rmSource(i){ sources.splice(i,1); fillPick(); renderSources(); seedOutputs(); renderOutputs(); }
+    function renderSources(){
+      // single-source kinds: auto-adopt the picked plate if none yet
+      if ((kind==='split'||kind==='repack') && !sources.length){ const l=lpnById($('s-pick').value); if(l) pushSource(l); }
+      $('src-tbl').innerHTML = sources.length ? `<thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th>Expiry</th><th class="num">Qty</th><th></th></tr></thead><tbody>`+
+        sources.map((s,i)=>`<tr><td class="mono">${s.lpn}</td><td>${esc(prodName(s.product))}</td><td class="mono">${esc(s.lot||'—')}</td>
+          <td>${esc(s.expiry||'—')}</td><td class="num">${s.qty}</td>
+          <td>${(kind==='merge'||kind==='rekit')?`<a href="#" onclick="rmSource(${i});return false">remove</a>`:''}</td></tr>`).join('')+`</tbody>`
+        : '<tbody></tbody>';
+    }
+    function seedOutputs(){
+      if (!sources.length){ outputs=[]; return; }
+      const s0=sources[0];
+      if (kind==='split'){
+        const half=Math.floor(s0.qty/2);
+        outputs=[ {product:s0.product,qty:half,lot:s0.lot,expiry:s0.expiry,loc:s0.loc,note:''},
+                  {product:s0.product,qty:s0.qty-half,lot:s0.lot,expiry:s0.expiry,loc:s0.loc,note:''} ];
+      } else if (kind==='merge'){
+        outputs=[ {product:s0.product,qty:srcQty(),lot:s0.lot,expiry:s0.expiry,loc:s0.loc,note:''} ];
+      } else if (kind==='repack'){
+        outputs=[ {product:s0.product,qty:s0.qty,lot:s0.lot,expiry:s0.expiry,loc:s0.loc,note:'Repacked'} ];
+      } else { // rekit
+        outputs=[ {product:s0.product,qty:s0.qty,lot:s0.lot,expiry:s0.expiry,loc:s0.loc,note:''} ];
+      }
+    }
+    function addOutput(){ const s0=sources[0]||{}; outputs.push({product:s0.product||DB.products[0].id,qty:0,lot:'',expiry:'',loc:(s0.loc||''),note:''}); renderOutputs(); }
+    function rmOutput(i){ outputs.splice(i,1); renderOutputs(); }
+    function setOut(i,f,v){ outputs[i][f] = (f==='qty')?Math.max(0,+v||0):v; renderOutputs(); }
+
+    function renderOutputs(){
+      const site=$('s-site').value;
+      const client = sources[0] ? lpnById(sources[0].lpn).client : null;
+      const editProduct = kind==='rekit';
+      const editQty = kind!=='repack';      // repack keeps source qty
+      const lockGen = (kind==='split'||kind==='merge'||kind==='repack');  // genealogy carried, not edited
+      const canAddRows = (kind==='split'||kind==='rekit');
+
+      $('out-tools').innerHTML = canAddRows ? `<button class="btn btn-outline btn-sm" onclick="addOutput()">+ Add output plate</button>` : '';
+
+      const locOpts = loc => storLocs(site).map(l=>`<option value="${l.id}"${l.id===loc?' selected':''}>${esc(l.structured)}</option>`).join('');
+      const prodOpts = pid => DB.products.filter(p=>!client||p.client===client).map(p=>`<option value="${p.id}"${p.id===pid?' selected':''}>${esc(prodName(p.id))}</option>`).join('');
+
+      $('out-tbl').innerHTML = outputs.length ? `<thead><tr><th>New LPN</th><th>Product</th><th>Lot</th><th>Expiry</th><th class="num">Qty</th><th>Location</th>${kind==='repack'?'<th>Packaging</th>':''}<th></th></tr></thead><tbody>`+
+        outputs.map((o,i)=>`<tr>
+          <td class="mono muted">auto</td>
+          <td>${editProduct?`<select onchange="setOut(${i},'product',this.value)">${prodOpts(o.product)}</select>`:esc(prodName(o.product))}</td>
+          <td>${lockGen?`<span class="mono">${esc(o.lot||'—')}</span>`:`<input value="${esc(o.lot||'')}" onchange="setOut(${i},'lot',this.value)">`}</td>
+          <td>${lockGen?esc(o.expiry||'—'):`<input type="date" value="${esc(o.expiry||'')}" onchange="setOut(${i},'expiry',this.value)">`}</td>
+          <td class="num">${editQty?`<input type="number" min="0" value="${o.qty}" onchange="setOut(${i},'qty',this.value)">`:o.qty}</td>
+          <td><select onchange="setOut(${i},'loc',this.value)">${locOpts(o.loc)}</select></td>
+          ${kind==='repack'?`<td><input value="${esc(o.note||'')}" onchange="setOut(${i},'note',this.value)" placeholder="e.g. cartons of 24"></td>`:''}
+          <td>${(kind==='split'||kind==='rekit')&&outputs.length>1?`<a href="#" onclick="rmOutput(${i});return false">✕</a>`:''}</td>
+        </tr>`).join('')+`</tbody>` : '<tbody></tbody>';
+
+      renderBalance();
+    }
+    // C2 — collect every bin in the job (source plate locs + output bins) that sits in an active frozen take.
+    function frozenHits(){
+      const hits=[]; const seen=new Set();
+      sources.forEach(s=>{ const fz=frozenTakeFor(s.loc); if(fz){ const k='src:'+s.loc; if(!seen.has(k)){ seen.add(k); hits.push({where:`source ${s.lpn} @ ${locName(s.loc)}`, take:fz.id}); } } });
+      outputs.forEach((o,i)=>{ if(!o.loc) return; const fz=frozenTakeFor(o.loc); if(fz){ const k='out:'+o.loc; if(!seen.has(k)){ seen.add(k); hits.push({where:`output bin ${locName(o.loc)}`, take:fz.id}); } } });
+      return hits;
+    }
+    function renderFrozenNote(hits){
+      const el=$('frz-note'); hits=hits||frozenHits();
+      if (hits.length){ el.innerHTML = `✗ Frozen physical-inventory take blocks this job: `+hits.map(h=>`<b>${esc(h.where)}</b> (${esc(h.take)})`).join(', ')+`. Confirm is refused until the take is posted or abandoned.`; el.style.display='block'; }
+      else el.style.display='none';
+    }
+    function renderBalance(){
+      const bal=$('bal'); const inQ=srcQty(), outQ=outQty();
+      let ok=true, msg='';
+      if (!sources.length){ ok=false; msg='Add a source plate.'; }
+      else if (kind==='split'){ if(outQ>inQ){ ok=false; msg=`Outputs (${outQ}) exceed the source (${inQ}). Reduce them.`; }
+        else { msg=`Splitting ${outQ} of ${inQ} — remainder on source: <b>${inQ-outQ}</b>.`; } }
+      else if (kind==='merge'){ msg=`Merging ${sources.length} plate(s) → <b>${outQ}</b> unit(s) on one plate.`; if(sources.length<2){ ok=false; msg='Add at least two plates to merge.'; } }
+      else if (kind==='repack'){ msg=`Repacking <b>${inQ}</b> unit(s) into a new packaging — quantity unchanged.`; }
+      else { msg=`Consuming ${inQ} unit(s) → creating ${outQ} unit(s) across ${outputs.length} plate(s).`; if(outputs.some(o=>!o.qty)){ ok=false; msg='Every output needs a quantity.'; } }
+      // C2 — a frozen source/output bin hard-blocks confirm regardless of the balance state.
+      const hits=frozenHits(); renderFrozenNote(hits);
+      if (hits.length) ok=false;
+      bal.className = 'bal '+(ok?'ok':'bad'); bal.innerHTML = msg;
+      $('confirm-btn').disabled = !ok;
+    }
+
+    function confirmJob(){
+      const inQ=srcQty(), outQ=outQty();
+      if (!sources.length){ alert('Add a source.'); return; }
+      if (kind==='split' && outQ>inQ){ alert('Outputs exceed source.'); return; }
+      if (kind==='merge' && sources.length<2){ alert('Merge needs ≥2 plates.'); return; }
+      if ((kind==='rekit') && outputs.some(o=>!o.qty)){ alert('Each output needs a qty.'); return; }
+      // C2 — physical-inventory freeze: refuse if any source plate's bin OR any output bin is in an active frozen take.
+      const hits=frozenHits();
+      if (hits.length){ alert(`Blocked — a frozen physical-inventory take covers:\n`+hits.map(h=>`  • ${h.where} (${h.take})`).join('\n')+`\n\nRepack jobs touching a frozen scope are refused until it is posted or abandoned.`); return; }
+      const site=$('s-site').value;
+      // create output LPNs
+      const createdOut=[];
+      outputs.forEach(o=>{
+        const id=nextLpnId();
+        const src=lpnById(sources[0].lpn);
+        const lp={ id, client:src.client, site, product:o.product, qty:+o.qty||0, lot:o.lot||'', expiry:o.expiry||'',
+          serials: (kind==='repack'||kind==='merge') ? (src.serials||[]).slice() : [], status:'available', loc:o.loc };
+        DB.lpns.push(lp); createdOut.push({lpn:id,product:o.product,qty:lp.qty,lot:lp.lot,expiry:lp.expiry,loc:o.loc,note:o.note||''});
+      });
+      // consume sources
+      const consumedSrc=[];
+      sources.forEach((s,idx)=>{ const lp=lpnById(s.lpn);
+        consumedSrc.push({lpn:s.lpn,product:s.product,qty:s.qty});
+        if (kind==='split' && idx===0){ const rem=inQ-outQ; lp.qty=rem; if(rem<=0) lp.status='consumed'; }
+        else { lp.qty=0; lp.status='consumed'; } });
+      const job={ id:nextId('RPK',DB.repacks,7000), kind, site, status:'confirmed', created:TODAY, by:'Samer Merhi', sources:consumedSrc, outputs:createdOut };
+      DB.repacks.push(job);
+      // carry any draft before/after photos onto the saved job record
+      if (draftRef && DB.attachments) DB.attachments.forEach(a=>{ if(a.ref===draftRef) a.ref=job.id; });
+      logTxn({ type:'repack', lpn:consumedSrc.map(s=>s.lpn).join(','), product:consumedSrc[0].product, qty:outQ, site,
+        user:'Samer Merhi', ref:job.id, note:`${KIND_LABEL[kind]}: ${consumedSrc.map(s=>s.lpn).join('+')} → ${createdOut.map(o=>o.lpn).join('+')}` });
+      banner(`<b>${job.id}</b> (${esc(KIND_LABEL[kind])}) confirmed — ${consumedSrc.length} plate(s) consumed, ${createdOut.length} created (${createdOut.map(o=>o.lpn).join(', ')}).`);
+      renderList(); show('list');
+    }
+
+    /* ============================================================ REVIEW */
+    function openRev(id){
+      const r=DB.repacks.find(x=>x.id===id); if(!r) return;
+      $('rev-title').textContent=`${KIND_LABEL[r.kind]||r.kind} ${r.id}`;
+      $('rev-summary').innerHTML=[['ID',r.id],['Kind',KIND_LABEL[r.kind]||r.kind],['Site',dbName('sites',r.site)],
+        ['Created',r.created],['By',r.by||'—'],['Status',r.status]].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')
+        + `<div style="grid-column:1/-1">${photoField({ ref:r.id, level:'header', title:'Before / after photos', readonly:true })}</div>`
+        + `<div style="grid-column:1/-1">${noteField({ ref:r.id, level:'header', title:'Job notes', readonly:true })}</div>`;
+      const tbl = (rows,extra)=>`<thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th>Expiry</th><th class="num">Qty</th>${extra?'<th>Loc</th>':''}</tr></thead><tbody>`+
+        rows.map(x=>`<tr><td class="mono">${esc(x.lpn)}</td><td>${esc(prodName(x.product))}</td><td class="mono">${esc(x.lot||'—')}</td><td>${esc(x.expiry||'—')}</td><td class="num">${x.qty}</td>${extra?`<td class="mono">${esc(locName(x.loc))}</td>`:''}</tr>`).join('')+`</tbody>`;
+      $('rev-src').innerHTML = tbl(r.sources,false);
+      $('rev-out').innerHTML = tbl(r.outputs,true);
+      show('review');
+    }
+
+    /* ============================================================ shared */
+    function nextId(prefix, coll, base){ let n=base; coll.forEach(x=>{ const m=new RegExp(prefix+'-(\\d+)').exec(x.id); if(m) n=Math.max(n,+m[1]); }); return prefix+'-'+(n+1); }
+    function show(v){ ['list','form','review'].forEach(x=>$('view-'+x).style.display=x===v?'':'none'); window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ============================================================ init */
+    $('f-site').innerHTML=DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('s-site').innerHTML=$('f-site').innerHTML;
+    $('f-site').addEventListener('change',e=>{ state.site=e.target.value; renderList(); });
+    $('f-since').value = SINCE_DEFAULT;
+    $('f-since').addEventListener('change',e=>{ state.since=e.target.value; renderList(); });
+    $('f-kind').addEventListener('change',e=>{ state.kind=e.target.value; renderList(); });
+    $('f-q').addEventListener('input',e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    $('s-site').addEventListener('change',()=>{ sources=[]; outputs=[]; fillPick(); renderSources(); seedOutputs(); renderOutputs(); });
+    $('s-pick').addEventListener('change',()=>{ if(kind==='split'||kind==='repack'){ sources=[]; renderSources(); seedOutputs(); renderOutputs(); } });
+
+    renderList();
+
+    /* ---- deep-link hand-off: ?lpn=<id> opens a new Split job with that plate as the source
+            (from the Stock Status ⋮ menu — mirrors the ?asn=/?out= pattern) ---- */
+    (function(){
+      const lpn = new URLSearchParams(location.search).get('lpn');
+      if (!lpn) return;
+      const l = lpnById(lpn);
+      if (!l) return;
+      state.site = l.site; $('f-site').value = l.site; if($('f-site')._ssSync)$('f-site')._ssSync();
+      renderList();
+      openNew();                                      // New job, kind=split, s-site=state.site
+      if($('s-site')._ssSync)$('s-site')._ssSync();
+      // only 'available' plates with stock are repack sources — preselect if eligible, else leave the form open
+      if (l.status==='available' && (l.qty||0)>0){
+        sources=[]; fillPick();                       // clear the auto-adopted plate so the target is back in the picker
+        $('s-pick').value = lpn; if($('s-pick')._ssSync)$('s-pick')._ssSync();
+        renderSources(); seedOutputs(); renderOutputs();   // renderSources adopts $('s-pick').value as the source
+      } else {
+        // blocked/zero plate can't be a repack source — open the form but don't silently adopt a different plate
+        sources=[]; outputs=[]; $('src-tbl').innerHTML='<tbody></tbody>'; $('out-tbl').innerHTML='<tbody></tbody>'; renderBalance();
+      }
+    })();
+  </script>
+</body></html>

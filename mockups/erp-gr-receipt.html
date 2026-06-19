@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Receive — WMS</title>
+<link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body
+  data-erp-active="gr-receipt"
+  data-erp-title="Receive"
+  data-erp-crumb="Goods Reception › Receive">
+
+<div id="page-content">
+
+  <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only). -->
+  <style>
+    .wms-modal { position:fixed; inset:0; background:rgba(20,28,40,.45);
+      display:flex; align-items:flex-start; justify-content:center; padding:48px 16px; z-index:50; }
+    .wms-dialog { background:var(--white); border-radius:var(--radius); width:560px; max-width:100%;
+      box-shadow:0 12px 40px rgba(0,0,0,.25); display:flex; flex-direction:column; max-height:86vh; }
+    .wms-dialog-head { display:flex; align-items:center; padding:14px 16px; border-bottom:1px solid var(--line-soft); }
+    .wms-dialog-head .wms-x { margin-left:auto; cursor:pointer; color:var(--ink-faint); }
+    .wms-dialog-body { padding:16px; overflow:auto; }
+    .wms-dialog-foot { display:flex; gap:8px; justify-content:flex-end; padding:12px 16px; border-top:1px solid var(--line-soft); flex-wrap:wrap; }
+    .erp-main .wms-dialog .btn { text-transform:uppercase; }
+
+    .pick-row { display:flex; align-items:center; gap:10px; padding:9px 12px; border-bottom:1px solid var(--line-soft); }
+    .pick-row:last-child { border-bottom:none; }
+    .pick-row:hover { background:var(--brand-tint2); }
+    .pick-row .info { flex:1; min-width:0; }
+
+    .line-card { background:var(--white); border:1px solid var(--line-soft); border-radius:var(--radius);
+      margin-bottom:12px; overflow:hidden; }
+    .line-card.on-pallet { border-color:#2f6fed; background:#eef4ff; }
+    .line-card .lc-head { display:flex; align-items:center; gap:10px; padding:10px 14px; flex-wrap:wrap;
+      background:var(--fill-2); border-bottom:1px solid var(--line); }
+    .line-card.on-pallet .lc-head { background:#e3edff; border-bottom-color:#bcd2f7; }
+    .line-card .lc-head .ln { font-weight:700; color:var(--ink-soft); }
+    .line-card .lc-head .pn { font-weight:700; }
+    .line-card .lc-head .acts { margin-left:auto; display:flex; gap:10px; align-items:center; }
+    .line-card .lc-body { padding:6px 8px 10px; overflow-x:auto; }
+    .lot-table { width:100%; border-collapse:collapse; min-width:920px; }
+    .lot-table th, .lot-table td { padding:6px 8px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+    .lot-table th { font-size:11px; text-transform:uppercase; letter-spacing:.02em; color:var(--ink-faint); text-align:left; white-space:nowrap; }
+    .lot-table td input, .lot-table td select { min-width:0; }
+    .lot-table .base { font-weight:600; white-space:nowrap; padding-top:13px; }
+    .lot-table .rm { color:var(--bad); cursor:pointer; }
+    .exp-warn { font-size:10px; margin-top:3px; font-weight:600; }
+    .ser-cell { white-space:nowrap; }
+    .ser-bad { color:var(--bad); font-weight:600; }
+    .ser-ok  { color:var(--ok); font-weight:600; }
+    .add-lot { color:var(--brand-text); cursor:pointer; font-weight:600; font-size:12px; }
+    .add-pallet { color:#2f6fed; cursor:pointer; font-weight:600; font-size:12px; }
+    .track-pills .badge { margin-left:4px; }
+    .disc-sel { border:1px solid var(--bad)!important; }
+    #pallet-bar .acts { margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; }
+    .refuse-warn { background:#fdecea; border-left:3px solid var(--bad); padding:10px 14px;
+      font-size:12.5px; color:#7a1f1f; border-radius:0 var(--radius) var(--radius) 0; margin-bottom:14px; }
+    .ovr-warn { background:#fff4e0; border-left:3px solid #b8860b; padding:9px 12px; margin-top:6px;
+      font-size:12px; color:#7a5a00; border-radius:0 var(--radius) var(--radius) 0; }
+    .ovr-warn label { display:inline-flex; gap:6px; align-items:center; font-weight:700; cursor:pointer; }
+    .dup-warn { background:#fff4e0; border-left:3px solid #b8860b; padding:9px 12px;
+      font-size:12px; color:#7a5a00; border-radius:0 var(--radius) var(--radius) 0; margin-bottom:12px; }
+    .dup-warn label { display:inline-flex; gap:6px; align-items:center; font-weight:700; cursor:pointer; }
+  </style>
+
+  <div class="page-head">
+    <h1 id="rcpt-h1">Receive</h1>
+    <span class="badge b-toputaway" style="align-self:center">DRAFT</span>
+    <div class="acts" style="margin-left:auto">
+      <button class="btn" id="btn-discard">DISCARD</button>
+      <button class="btn btn-outline" id="btn-draft">SAVE DRAFT</button>
+      <button class="btn btn-primary" id="btn-confirm">CONFIRM RECEIPT</button>
+    </div>
+  </div>
+  <p class="sub">Receive against an ASN (pre-filled) or blind. Full manual entry — the fallback when scanners are offline. Each lot line carries a <b>condition</b>: Good goes to <b>wait/put</b> (to&nbsp;putaway); Hold-for-inspection goes to the <b>Inspection</b> screen; Damaged goes to <b>quarantine</b>. Confirm <b>mints real license plates</b> (split per pack level or per&nbsp;each) and prints labels; or defer a line onto a <b>mixed pallet</b> (one license plate, many products) that decomposes at putaway.</p>
+
+  <!-- ================= HEADER ================= -->
+  <div class="panel">
+    <div class="row">
+      <label class="field col"><span>Client <span class="req">*</span></span><select id="h-client"></select></label>
+      <label class="field col"><span>Site <span class="req">*</span></span><select id="h-site"></select></label>
+      <label class="field col"><span>Receive against</span>
+        <select id="h-asn"><option value="blind">Blind receipt — no ASN</option></select></label>
+    </div>
+    <div class="row">
+      <label class="field col"><span>Receipt reference</span><input id="h-ref" value="RC-DRAFT-0007"></label>
+      <label class="field col"><span>Supplier delivery-note ref</span><input id="h-deliveryref" placeholder="e.g. DN-88231 (from the carrier paperwork)"></label>
+      <label class="field col"><span>Receipt date</span><input id="h-date" type="date" value="2026-06-15"></label>
+    </div>
+    <div class="row">
+      <label class="field col"><span>Received by</span><input id="h-by" value="Benjamin Felix — Supervisor" readonly></label>
+      <div class="field col"></div>
+      <div class="field col" style="display:flex;align-items:flex-end;justify-content:flex-end">
+        <button class="btn btn-outline" id="btn-refuse" style="color:var(--bad);border-color:var(--bad)">⛔ REFUSE DELIVERY</button>
+      </div>
+    </div>
+    <p class="muted" style="margin:4px 0 0;font-size:12px">
+      Your role (<b>Supervisor</b>) creates new products <b>live</b>. Operators create them as
+      <span class="badge b-hold" style="font-size:10px">pending</span> for later confirmation.
+    </p>
+  </div>
+
+  <!-- ================= LINES ================= -->
+  <div class="page-head" style="margin-top:18px;margin-bottom:8px">
+    <h1 style="font-size:16px">Receipt lines</h1>
+    <span class="muted" id="lines-summary"></span>
+    <div class="acts" style="margin-left:auto">
+      <button class="btn btn-outline" id="btn-add-existing">+ ADD PRODUCT</button>
+      <button class="btn" id="btn-add-new">+ NEW PRODUCT (INLINE)</button>
+    </div>
+  </div>
+
+  <div id="asn-banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+  <!-- duplicate delivery-note / closed-ASN guard (F16) -->
+  <div id="dup-banner" class="dup-warn" style="display:none"></div>
+
+  <!-- blind receipt ↔ open ASN reconciliation (F2b) -->
+  <div id="blind-asn-banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+  <!-- mixed (aggregate) pallet in progress — post-hoc aggregation, one shared label at close -->
+  <div id="pallet-bar" class="panel" style="display:none;border-color:#2f6fed;background:#eef4ff;margin-bottom:12px"></div>
+
+  <div id="lines"></div>
+
+  <div class="placeholder" id="lines-empty" style="display:none">
+    No lines yet. Select an ASN above to pre-fill, or add a product.
+  </div>
+
+  <!-- ================= RECEIPT NOTE ================= -->
+  <div class="panel" style="margin-top:18px">
+    <h3 style="margin-top:0">Receipt note</h3>
+    <label class="field"><span>General note (optional)</span>
+      <input id="q-note" placeholder="Carrier, seal, pallet condition, anything not tied to a single line…"></label>
+    <div id="receipt-photos" style="margin:10px 0"></div>
+    <div id="receipt-notes" style="margin:10px 0"></div>
+    <p class="muted" style="margin:0;font-size:12px">
+      Quality is captured <b>per lot</b> above (Condition + Reason). For detailed disposition or damage photos use the full
+      <a href="erp-gr-inspect.html">Inspection</a> screen — items marked <b>Hold for inspection</b> land there.
+    </p>
+  </div>
+
+  <div class="btn-row" style="margin-top:20px;justify-content:flex-end">
+    <button class="btn btn-outline" id="btn-draft2">SAVE DRAFT</button>
+    <button class="btn btn-primary" id="btn-confirm2">CONFIRM RECEIPT</button>
+  </div>
+
+  <!-- ===== MODALS (inside #page-content) ===== -->
+  <div class="wms-modal" id="serial-modal" style="display:none">
+    <div class="wms-dialog">
+      <div class="wms-dialog-head"><b>Capture serials</b><span class="wms-x" data-close="serial-modal">✕</span></div>
+      <div class="wms-dialog-body">
+        <p class="muted" id="serial-ctx" style="margin-top:0"></p>
+        <div class="btn-row" style="margin-bottom:10px">
+          <button class="btn btn-sm btn-outline" id="serial-auto">AUTO-GENERATE RANGE</button>
+          <button class="btn btn-sm" id="serial-clear">CLEAR</button>
+          <span class="mono" id="serial-count" style="margin-left:auto"></span>
+        </div>
+        <label class="field"><span>One serial per line (must be unique)</span>
+          <textarea id="serial-text" rows="7" placeholder="SN-0001&#10;SN-0002&#10;…"></textarea></label>
+      </div>
+      <div class="wms-dialog-foot">
+        <button class="btn" data-close="serial-modal">CANCEL</button>
+        <button class="btn btn-primary" id="serial-save">SAVE SERIALS</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="wms-modal" id="pick-modal" style="display:none">
+    <div class="wms-dialog">
+      <div class="wms-dialog-head"><b>Add product to receipt</b><span class="wms-x" data-close="pick-modal">✕</span></div>
+      <div class="wms-dialog-body">
+        <label class="field" style="margin-bottom:8px"><span>Search product</span>
+          <input id="pick-search" placeholder="Type a name or SKU…" autocomplete="off"></label>
+        <p class="muted" id="pick-count" style="margin:0 0 8px"></p>
+        <div id="pick-list" style="max-height:340px;overflow:auto;border:1px solid var(--line-soft);border-radius:var(--radius)"></div>
+      </div>
+      <div class="wms-dialog-foot"><button class="btn btn-primary" data-close="pick-modal">DONE</button></div>
+    </div>
+  </div>
+
+  <div class="wms-modal" id="new-modal" style="display:none">
+    <div class="wms-dialog">
+      <div class="wms-dialog-head"><b>Create product (inline)</b><span class="wms-x" data-close="new-modal">✕</span></div>
+      <div class="wms-dialog-body">
+        <p class="muted" style="margin-top:0">Minimum fields to receive now. Created <b>live</b> for your role; complete the record later in Master Data.</p>
+        <label class="field"><span>Client <span class="req">*</span></span><input id="n-client" readonly></label>
+        <label class="field"><span>Name <span class="req">*</span></span><input id="n-name" placeholder="e.g. Tomato Passata 700g"></label>
+        <div class="field-row">
+          <label class="field"><span>SKU</span><input id="n-sku" placeholder="auto if blank"></label>
+          <label class="field"><span>Base unit <span class="req">*</span></span><select id="n-base"></select></label>
+        </div>
+        <label class="field"><span>Packaging</span>
+          <select id="n-pkg"><option value="">Base unit only (no packaging)</option></select></label>
+        <fieldset>
+          <legend>Tracking</legend>
+          <label style="display:inline-flex;gap:6px;align-items:center;margin-right:16px"><input type="checkbox" id="n-lot" checked style="width:auto"> Lot/batch</label>
+          <label style="display:inline-flex;gap:6px;align-items:center;margin-right:16px"><input type="checkbox" id="n-exp" checked style="width:auto"> Expiry</label>
+          <label style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="n-ser" style="width:auto"> Serial</label>
+          <p class="muted" style="margin:8px 0 0;font-size:11px">Expiry tracking requires lot tracking (units in a lot share one expiry), so enabling Expiry enables Lot.</p>
+        </fieldset>
+
+        <details style="margin-top:10px">
+          <summary style="cursor:pointer;font-weight:600;font-size:13px">Category &amp; preferred place (optional)</summary>
+          <div style="margin-top:10px">
+            <p class="muted" style="margin:0 0 8px;font-size:11px">Optional now — can be completed later in Master Data. Helps directed putaway slot this product.</p>
+            <div class="field-row">
+              <label class="field"><span>Category</span><select id="n-cat" onchange="npFillSubs()"></select></label>
+              <label class="field"><span>Sub-category</span><select id="n-sub"></select></label>
+            </div>
+            <div class="field-row">
+              <label class="field"><span>Preferred place (this site)</span>
+                <select id="n-pmode" onchange="npMode()">
+                  <option value="none">No preference</option>
+                  <option value="location">Specific location</option>
+                  <option value="area">Preferred area</option>
+                </select></label>
+              <label class="field" id="n-pval-wrap"><span>Location</span><select id="n-pval" disabled><option>—</option></select></label>
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="wms-dialog-foot">
+        <button class="btn" data-close="new-modal">CANCEL</button>
+        <button class="btn btn-primary" id="new-save">CREATE &amp; ADD LINE</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="wms-modal" id="done-modal" style="display:none">
+    <div class="wms-dialog">
+      <div class="wms-dialog-head"><b>Receipt confirmed</b><span class="wms-x" data-close="done-modal">✕</span></div>
+      <div class="wms-dialog-body">
+        <div class="success" style="padding:12px 0"><div class="check">✓</div><p id="done-msg" style="margin:6px 0 0"></p></div>
+        <table class="wf"><tbody id="done-rows"></tbody></table>
+      </div>
+      <div class="wms-dialog-foot">
+        <button class="btn btn-primary" id="done-print-all">PRINT ALL LABELS</button>
+        <a class="btn btn-outline" href="erp-pa-tasks.html">GO TO PUTAWAY</a>
+        <a class="btn btn-outline" id="done-grn" href="erp-gr-grn.html">VIEW GRN</a>
+        <a class="btn" href="erp-gr-receipt.html">NEW RECEIPT</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wms-modal" id="pallet-modal" style="display:none">
+    <div class="wms-dialog">
+      <div class="wms-dialog-head"><b>Mixed pallet closed</b><span class="wms-x" data-close="pallet-modal">✕</span></div>
+      <div class="wms-dialog-body">
+        <div class="success" style="padding:12px 0"><div class="check">✓</div><p id="plt-msg" style="margin:6px 0 0"></p></div>
+        <p class="muted" style="margin:0 0 6px;font-size:12px">One license plate · scan it at Putaway to place each product into its bin (decomposition mints one child LPN per line).</p>
+        <table class="wf"><tbody id="plt-rows"></tbody></table>
+      </div>
+      <div class="wms-dialog-foot">
+        <button class="btn btn-primary" id="plt-print">PRINT PALLET LABEL</button>
+        <a class="btn btn-outline" href="erp-pa-tasks.html">GO TO PUTAWAY</a>
+        <button class="btn" data-close="pallet-modal">CONTINUE RECEIVING</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REFUSE DELIVERY MODAL (F4) — goods kept OUTSIDE the warehouse, NO stock minted ===== -->
+  <div class="wms-modal" id="refuse-modal" style="display:none">
+    <div class="wms-dialog">
+      <div class="wms-dialog-head"><b>⛔ Refuse delivery</b><span class="wms-x" data-close="refuse-modal">✕</span></div>
+      <div class="wms-dialog-body">
+        <div class="refuse-warn">The goods are <b>kept OUTSIDE the warehouse</b> and handed back to the carrier.
+          This records the reason and (when receiving against an ASN) marks it <b>refused</b> — <b>no stock is created</b>.</div>
+        <p class="muted" id="refuse-ctx" style="margin-top:0"></p>
+        <label class="field"><span>Reason <span class="req">*</span></span><select id="refuse-reason"></select></label>
+        <div class="field-row">
+          <label class="field"><span>Supplier</span><select id="refuse-supplier"></select></label>
+          <label class="field"><span>Carrier (returned to)</span><select id="refuse-carrier"></select></label>
+        </div>
+        <label class="field"><span>Note (optional)</span><input id="refuse-note" placeholder="Seal no., temperature reading, who was notified…"></label>
+      </div>
+      <div class="wms-dialog-foot">
+        <button class="btn" data-close="refuse-modal">CANCEL</button>
+        <button class="btn btn-primary" id="refuse-confirm">CONFIRM REFUSAL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REFUSAL CONFIRMED ===== -->
+  <div class="wms-modal" id="refused-modal" style="display:none">
+    <div class="wms-dialog">
+      <div class="wms-dialog-head"><b>Delivery refused</b><span class="wms-x" data-close="refused-modal">✕</span></div>
+      <div class="wms-dialog-body">
+        <div class="success" style="padding:12px 0"><div class="check">✓</div><p id="refused-msg" style="margin:6px 0 0"></p></div>
+        <p class="muted" style="margin:0">The goods never entered the warehouse — <b>no license plates were minted</b> and stock is unchanged.</p>
+      </div>
+      <div class="wms-dialog-foot">
+        <a class="btn btn-primary" href="erp-gr-asn.html">BACK TO ASN LIST</a>
+        <a class="btn btn-outline" href="erp-gr-receipt.html">NEW RECEIPT</a>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/photos.js"></script>
+<script src="assets/notes.js"></script>
+<script src="assets/barcode.js"></script>
+<script src="assets/erp-shell.js"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  // Over/short DISCREPANCY reasons (qty vs ASN) — kept local. CONDITION reasons (Hold/Damaged) come from
+  // master data via reasonsFor('receipt', 'hold'|'damaged') so they match the Inspection screen (F19).
+  const REASONS = ['Short / under-delivered','Over / extra delivered','Damaged in transit',
+    'Expired / near expiry','Count discrepancy','Contamination / spoilage','Labelling / barcode error','Other'];
+  const COND = { good:'Good → wait/put', inspect:'Hold for inspection', damaged:'Damaged → quarantine' };
+  const condStatus = { good:'to-putaway', inspect:'to-inspect', damaged:'quarantine' };
+  const condReasonKey = { inspect:'hold', damaged:'damaged' };   // receipt-condition → reason-domain group
+  function condReasons(condition){ return reasonsFor('receipt', condReasonKey[condition] || 'hold'); }
+  const TODAY = new Date('2026-06-15');
+
+  function expiryFlag(d){
+    if (!d) return null;
+    const days = Math.round((new Date(d) - TODAY) / 86400000);
+    if (days < 0)  return { color:'#b03030', txt:`⚠ expired ${-days}d ago` };
+    if (days <= 30) return { color:'#8a6d00', txt:`⚠ expires in ${days}d` };
+    return null;
+  }
+  function levelsFor(pid){
+    const pk = DB.packagings.find(p => p.product === pid);
+    if (pk && pk.levels && pk.levels.length) return pk.levels.map(l => ({ name:l.level, factor:l.factor||1 }));
+    const p = DB.products.find(x => x.id === pid) || CATALOG.find(x => x.id === pid);
+    return [{ name: cap(p ? p.uom : 'each'), factor:1 }];
+  }
+  function baseUnitName(pid){ return levelsFor(pid)[0].name; }
+  function cap(s){ return String(s).charAt(0).toUpperCase() + String(s).slice(1); }
+  function prod(pid){ return CATALOG.find(x => x.id === pid); }
+  function prodLabel(pid){ const p = prod(pid); return p ? `${p.name} (${p.sku||''})` : pid; }
+  function isSerial(pid){ const p = prod(pid); return !!(p && p.track && p.track.serial); }
+  function isLotP(pid){ const p = prod(pid); return !!(p && p.track && p.track.lot); }
+  function isExpP(pid){ const p = prod(pid); return !!(p && p.track && p.track.expiry); }
+  function lotBase(ln, lot){ const lv = levelsFor(ln.pid); return (Number(lot.qty)||0) * (lv[lot.lvl]?lv[lot.lvl].factor:1); }
+  function lineNow(ln){ let n=0; ln.lots.forEach(lot => n += lotBase(ln, lot)); return n; }
+  // F22 — true when the received qty overshoots the ASN outstanding by more than 10% (needs supervisor approval).
+  function overReceiptExcess(ln){
+    if (ln.expected == null) return false;
+    const now = lineNow(ln); const diff = now - ln.expected;
+    return diff > 0 && diff > ln.expected * 0.10;
+  }
+  // A receipt line is "on the pallet" iff at least one of its lots was deferred onto the pallet-in-progress.
+  function lineOnPallet(ln){ return state.palletLines.some(pl => pl.srcUid === ln._uid); }
+  function receiver(){ return ($('h-by') && $('h-by').value) || 'ERP receipt'; }
+  // An inline-created product lives in CATALOG only; promote it to DB.products so the minted stock + helpers + labels resolve.
+  function ensureProduct(pid){ if (DB.products.some(p=>p.id===pid)) return; const c = CATALOG.find(p=>p.id===pid); if (c) DB.products.push(c); }
+
+  let CATALOG = DB.products.slice();
+  let nextNewSku = 900;
+  let _lineUid = 1;
+
+  const state = { client: DB.clients[0].id, site: DB.sites[0].id, asn:'blind', fromAsn:null, lines:[], palletLines:[] };
+  function emptyLot(){ return { lot:'', expiry:'', qty:1, lvl:0, serials:[], split:'none', condition:'good', reason:'' }; }
+  // Stamp a stable per-line uid so pallet membership survives index shuffles (add/remove lines).
+  function mkLine(props){ return Object.assign({ _uid:_lineUid++, lots:[emptyLot()] }, props); }
+
+  let lastMint = [];        // plates minted by the last Confirm (for "Print all labels")
+  let lastPallet = null;    // pallet id minted by the last Close pallet (for "Print pallet label")
+
+  /* ---------- header ---------- */
+  function fillHeader(){
+    $('h-client').innerHTML = DB.clients.map(c => `<option value="${c.id}"${c.id===state.client?' selected':''}>${esc(c.name)}</option>`).join('');
+    $('h-site').innerHTML   = DB.sites.map(s => `<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    const asns = DB.asns.filter(a => a.client === state.client && a.site === state.site);
+    $('h-asn').innerHTML = `<option value="blind">Blind receipt — no ASN</option>` +
+      asns.map(a => `<option value="${a.id}"${a.id===state.asn?' selected':''}>${a.id} · ${asnStatus(a)}</option>`).join('');
+  }
+  function loadAsn(asnId){
+    state.asn = asnId;
+    if (asnId === 'blind') { state.fromAsn = null; syncMode(); render(); return; }
+    const a = DB.asns.find(x => x.id === asnId);
+    if (!a) { state.fromAsn = null; syncMode(); render(); return; }
+    state.fromAsn = asnId;
+    state.lines = a.lines.map((l, idx) => {
+      const already = l.received || 0, remaining = Math.max(0, l.qty - already);
+      const lot = emptyLot(); lot.qty = remaining; lot.lvl = 0;
+      return mkLine({ pid:l.product, lots:[lot], expected:remaining, already, asnQty:l.qty, asnLineIdx:idx, discReason:'' });
+    }).filter(ln => ln.expected > 0);   // outstanding lines only
+    syncMode(); render();
+  }
+  // Stable header ref for photos: the ASN id when receiving against one, else the receipt reference.
+  function headerRef(){ return state.fromAsn || ($('h-ref') && $('h-ref').value) || 'RC-DRAFT'; }
+  function renderReceiptPhotos(){
+    const el = $('receipt-photos'); if (!el || typeof photoField !== 'function') return;
+    el.innerHTML = photoField({ ref: headerRef(), level:'header', title:'Delivery / condition photos (optional)' });
+    const ne = $('receipt-notes');
+    if (ne && typeof noteField === 'function') ne.innerHTML = noteField({ ref: headerRef(), level:'header', title:'Receipt notes (optional)' });
+  }
+  function syncMode(){
+    const h1 = $('rcpt-h1'), banner = $('asn-banner');
+    renderReceiptPhotos();
+    if (state.fromAsn) {
+      if (h1) h1.textContent = `Receive — ${state.fromAsn}`;
+      const a = DB.asns.find(x => x.id === state.fromAsn);
+      const t = a ? asnTotals(a) : { rec:0, exp:0 };
+      banner.style.display = 'block';
+      if (!state.lines.length) {
+        banner.innerHTML = `<b>${esc(state.fromAsn)}</b> is fully received (${t.rec} / ${t.exp}) — nothing outstanding. Add lines only for unexpected extras.`;
+      } else {
+        banner.innerHTML = `Pre-filled from <b>${esc(state.fromAsn)}</b> (currently <b>${asnStatus(a)}</b>, ${t.rec} / ${t.exp} received).
+          Each line is pre-filled with the <b>outstanding remainder</b>. Receiving the full remainder closes the line; less leaves the ASN <b>partial</b>.
+          Over/short must carry a <b>discrepancy reason</b>.
+          <label style="display:inline-flex;gap:6px;align-items:center;margin-top:8px;font-weight:600">
+            <input type="checkbox" id="close-short" style="width:auto"> Close ASN after this receipt (cancel any remaining — won't arrive)
+          </label>`;
+      }
+    } else {
+      if (h1) h1.textContent = 'Receive — Blind / Manual';
+      banner.style.display = 'none';
+    }
+    refreshDupBanner();   // F16 — closed-ASN / duplicate delivery-note guard
+  }
+
+  /* ---------- render ---------- */
+  function reasonSelect(f, li, ki, val){
+    const k = ki == null ? '' : ` data-k="${ki}"`;
+    const cond = (state.lines[li] && state.lines[li].lots[ki]) ? state.lines[li].lots[ki].condition : 'inspect';
+    const opts = [`<option value="">— reason * —</option>`]
+      .concat(condReasons(cond).map(r => `<option${r===val?' selected':''}>${esc(r)}</option>`)).join('');
+    return `<select class="disc-sel" data-f="${f}" data-l="${li}"${k} style="width:185px">${opts}</select>`;
+  }
+
+  // A line already deferred onto the pallet reopens read-only — no edits / no own-LPN confirm (prevents double-receipt).
+  function onPalletCard(ln, li, p){
+    const bits = ln.lots.map(lot => {
+      const base = lotBase(ln, lot);
+      return `${base.toLocaleString()} ${esc(baseUnitName(ln.pid))}`
+        + (lot.lot?` · lot ${esc(lot.lot)}`:'') + (lot.expiry?` · exp ${esc(lot.expiry)}`:'')
+        + ((lot.serials&&lot.serials.length)?` · ${lot.serials.length} serials`:'');
+    }).join('  •  ');
+    return `<div class="line-card on-pallet">
+      <div class="lc-head">
+        <span class="ln">#${li+1}</span>
+        <span class="pn">${esc(p.name)}</span>
+        <span class="muted mono">${esc(p.sku||'')}</span>
+        <span class="badge b-toputaway">on pallet</span>
+        <div class="acts"><a class="rm" data-act="rmpallet" data-l="${li}">Cancel &amp; remove from pallet</a></div>
+      </div>
+      <div class="lc-body" style="padding:10px 14px">
+        <div>${bits}</div>
+        <p class="muted" style="margin:6px 0 0;font-size:12px">Committed to the pallet in progress — it gets one shared pallet label when you close the pallet. To change qty / lot / serials, remove it here and re-enter.</p>
+      </div>
+    </div>`;
+  }
+
+  function render(){
+    const wrap = $('lines');
+    $('lines-empty').style.display = state.lines.length ? 'none' : 'flex';
+
+    wrap.innerHTML = state.lines.map((ln, li) => {
+      const p = prod(ln.pid) || { name: ln.pid, sku:'', track:{} };
+      if (lineOnPallet(ln)) return onPalletCard(ln, li, p);
+
+      const levels = levelsFor(ln.pid);
+      const serial = isSerial(ln.pid);
+      const showLot = !!(p.track && p.track.lot);
+      const showExp = !!(p.track && p.track.expiry);
+      const baseU = baseUnitName(ln.pid);
+      const pills = []
+        .concat(p.track && p.track.lot ? ['lot'] : [])
+        .concat(p.track && p.track.expiry ? ['expiry'] : [])
+        .concat(serial ? ['serial'] : [])
+        .map(t => `<span class="badge" style="font-size:10px">${t}</span>`).join('');
+
+      const rows = ln.lots.map((lot, ki) => {
+        const base = lotBase(ln, lot);
+        const lvlSel = levels.map((lv,i) => `<option value="${i}"${i===lot.lvl?' selected':''}>${esc(lv.name)}${lv.factor>1?` (×${lv.factor})`:''}</option>`).join('');
+
+        let serCell = '<span class="muted">—</span>';
+        if (serial) {
+          const need = base, have = lot.serials.length;
+          const cls = have===need && need>0 && new Set(lot.serials).size===have ? 'ser-ok' : 'ser-bad';
+          serCell = `<a class="add-lot ser-cell" data-act="serials" data-l="${li}" data-k="${ki}"><span class="${cls}">${have}/${need}</span> ⛓</a>`;
+        }
+        // Split into LPNs — every packaging level (INCLUDING per-each, level 0) that yields ≥2 plates (mirrors the PWA).
+        const splitChoices = levels
+          .map((lv,i) => ({ i, name:lv.name, n:Math.max(1, Math.ceil(base/(lv.factor||1))), factor:lv.factor||0 }))
+          .filter(o => o.factor>0 && o.n>=2);
+        if (lot.split!=='none' && !splitChoices.some(o => String(o.i)===String(lot.split))) lot.split='none';
+        const splitOpts = [`<option value="none"${lot.split==='none'?' selected':''}>1 LPN (whole)</option>`]
+          .concat(splitChoices.map(o => `<option value="${o.i}"${String(lot.split)===String(o.i)?' selected':''}>per ${esc(o.name)} → ${o.n}</option>`)).join('');
+        const condSel = Object.keys(COND).map(c => `<option value="${c}"${lot.condition===c?' selected':''}>${COND[c]}</option>`).join('');
+        const reasonCell = lot.condition !== 'good' ? reasonSelect('reason', li, ki, lot.reason) : '<span class="muted">—</span>';
+        const ef = showExp ? expiryFlag(lot.expiry) : null;
+        // F9 — expired lot received as Good is blocked; flag it right on the condition cell.
+        const expiredGood = showExp && lot.condition==='good' && isExpired({ expiry:lot.expiry });
+
+        return `<tr>
+          ${showLot?`<td><input data-f="lot" data-l="${li}" data-k="${ki}" value="${esc(lot.lot)}" placeholder="e.g. L240115" title="Manufacturer batch/lot number" style="width:110px"></td>`:''}
+          ${showExp?`<td><input data-f="expiry" data-l="${li}" data-k="${ki}" type="date" value="${esc(lot.expiry)}" style="width:140px">${ef?`<div class="exp-warn" style="color:${ef.color}">${ef.txt}</div>`:''}</td>`:''}
+          <td><input data-f="qty" data-l="${li}" data-k="${ki}" type="number" min="0" value="${esc(lot.qty)}" style="width:74px"></td>
+          <td><select data-f="lvl" data-l="${li}" data-k="${ki}" style="width:150px">${lvlSel}</select></td>
+          <td class="base">= ${base.toLocaleString()} ${esc(baseU)}</td>
+          ${serial?`<td>${serCell}</td>`:''}
+          <td><select data-f="cond" data-l="${li}" data-k="${ki}" class="${expiredGood?'disc-sel':''}" style="width:155px">${condSel}</select>${expiredGood?`<div class="exp-warn" style="color:var(--bad)">⚠ expired — can't be Good</div>`:''}</td>
+          <td>${reasonCell}</td>
+          <td><select data-f="split" data-l="${li}" data-k="${ki}" style="width:150px">${splitOpts}</select></td>
+          <td class="right">${ln.lots.length>1?`<span class="rm" data-act="rmlot" data-l="${li}" data-k="${ki}">✕</span>`:''}</td>
+        </tr>`;
+      }).join('');
+
+      const head = `<tr>
+        ${showLot?'<th>Lot/Batch *</th>':''}
+        ${showExp?'<th>Expiry *</th>':''}
+        <th>Qty *</th><th>UoM / pack level</th><th>Base</th>
+        ${serial?'<th>Serials</th>':''}
+        <th>Condition</th><th>Reason</th><th>LPN</th><th></th>
+      </tr>`;
+
+      // line-level over/short vs outstanding remainder + required discrepancy reason
+      let expBadge = '', alreadyNote = '', discSel = '', ovrWarn = '';
+      if (ln.expected != null) {
+        const now = lineNow(ln), diff = now - ln.expected;
+        const cls = diff===0 ? 'b-available' : (diff>0 ? 'b-quarantine' : 'b-hold');
+        const txt = diff===0 ? `✓ completes line (${now} / ${ln.expected})`
+                  : diff>0   ? `over +${diff} (vs ${ln.expected} outstanding)`
+                             : `short ${diff} (leaves ${ln.expected-now} open)`;
+        expBadge = `<span class="badge ${cls}">${txt}</span>`;
+        if (ln.already) alreadyNote = `<span class="muted" style="font-size:11px">${esc(state.fromAsn)}: ${ln.already} of ${ln.asnQty} already received</span>`;
+        if (diff !== 0) {
+          const opts = [`<option value="">⚠ discrepancy reason *</option>`]
+            .concat(REASONS.map(r => `<option${r===ln.discReason?' selected':''}>${esc(r)}</option>`)).join('');
+          discSel = `<select class="disc-sel" data-f="discreason" data-l="${li}" style="width:200px">${opts}</select>`;
+        }
+        // F22 — over-receipt beyond +10% of outstanding needs an explicit supervisor approval.
+        if (overReceiptExcess(ln)) {
+          ovrWarn = `<div class="ovr-warn">⚠ Over-receipt of <b>+${diff}</b> exceeds 10% of the ${ln.expected} outstanding.
+            <label><input type="checkbox" data-f="ovrok" data-l="${li}"${ln.ovrApproved?' checked':''} style="width:auto"> Approve over-receipt (supervisor)</label></div>`;
+        }
+      }
+      const offAsn = (state.fromAsn && ln.asnLineIdx == null)
+        ? `<span class="badge b-hold" style="font-size:10px" title="Not on the ASN">off-ASN</span>` : '';
+
+      return `<div class="line-card">
+        <div class="lc-head">
+          <span class="ln">#${li+1}</span>
+          <span class="pn">${esc(p.name)}</span>
+          <span class="muted mono">${esc(p.sku||'')}</span>
+          <span class="track-pills">${pills}</span>
+          ${offAsn}${expBadge}${discSel}${alreadyNote}${ovrWarn}
+          <div class="acts">
+            ${photoField({ ref:`${headerRef()}:L${li}`, level:'line', title:'Line photos' })}
+            ${noteField({ ref:`${headerRef()}:L${li}`, level:'line', title:'Line note' })}
+            <a class="add-pallet" data-act="addpallet" data-l="${li}" title="Defer this line onto a mixed pallet (one shared license plate)">📦 Add to pallet</a>
+            <a class="add-lot" data-act="addlot" data-l="${li}">+ Add lot/batch</a>
+            <a class="rm" data-act="rmline" data-l="${li}">Remove line</a>
+          </div>
+        </div>
+        <div class="lc-body">
+          <table class="lot-table"><thead>${head}</thead><tbody>${rows}</tbody></table>
+        </div>
+      </div>`;
+    }).join('');
+
+    // summary with routing tally (own-LPN lines only — pallet lines are summarised in the pallet bar)
+    let units=0, lpns=0, nInsp=0, nQuar=0;
+    state.lines.forEach(ln => {
+      if (lineOnPallet(ln)) return;
+      ln.lots.forEach(lot => {
+        const lv = levelsFor(ln.pid), base = lotBase(ln, lot); units += base;
+        const splitIdx = (lot.split==='none') ? null : +lot.split;
+        const factor = (splitIdx!=null && lv[splitIdx] && lv[splitIdx].factor>0) ? lv[splitIdx].factor : 0;
+        lpns += factor ? Math.max(1, Math.ceil(base/factor)) : 1;
+        if (lot.condition==='inspect') nInsp += base;
+        if (lot.condition==='damaged') nQuar += base;
+      });
+    });
+    const ownLines = state.lines.filter(ln => !lineOnPallet(ln)).length;
+    $('lines-summary').textContent = state.lines.length
+      ? `${ownLines} own-LPN line(s) · ${units.toLocaleString()} base units · ${lpns} LPN(s)` +
+        (nInsp?` · ${nInsp} to inspect`:'') + (nQuar?` · ${nQuar} to quarantine`:'') +
+        (state.palletLines.length?` · 📦 ${state.palletLines.length} on pallet`:'')
+      : '';
+
+    renderPalletBar();
+    checkBlindAsn();
+  }
+
+  /* ---------- F2b — blind receipt ↔ open ASN reconciliation ---------- */
+  function checkBlindAsn(){
+    const el = $('blind-asn-banner'); if (!el) return;
+    // Only relevant on a BLIND receipt (against-ASN already reconciles automatically).
+    if (state.fromAsn || !state.lines.length){ el.style.display='none'; el.innerHTML=''; return; }
+    // For each distinct product on the receipt, find an open ASN that still expects it.
+    const seen = {}; const hits = [];
+    state.lines.forEach(ln => {
+      if (seen[ln.pid]) return; seen[ln.pid] = 1;
+      const open = openAsnsForProduct(ln.pid, state.client, state.site);
+      if (open.length) hits.push({ pid:ln.pid, asn:open[0] });
+    });
+    if (!hits.length){ el.style.display='none'; el.innerHTML=''; return; }
+    el.style.display = 'block';
+    el.innerHTML = hits.map(h =>
+      `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap${hits.length>1?';margin-bottom:6px':''}">
+        <span>📋 An <b>open ASN exists</b> for <b>${esc((prod(h.pid)||{}).name||h.pid)}</b> — <b>${esc(h.asn.id)}</b>. Receive against it?</span>
+        <button class="btn btn-sm btn-primary" data-switchasn="${esc(h.asn.id)}">Receive against ${esc(h.asn.id)} ›</button>
+      </div>`).join('');
+  }
+  // one-tap switch from blind → the matching open ASN
+  $('blind-asn-banner').addEventListener('click', e => {
+    const b = e.target.closest('[data-switchasn]'); if (!b) return;
+    const id = b.dataset.switchasn;
+    state.lines = []; state.palletLines = [];   // drop the blind draft; the ASN pre-fills outstanding lines
+    state.asn = id; fillHeader(); loadAsn(id);
+  });
+
+  /* ---------- mixed (aggregate) pallet — post-hoc aggregation ---------- */
+  function renderPalletBar(){
+    const bar = $('pallet-bar'); const n = state.palletLines.length;
+    if (!n){ bar.style.display='none'; bar.innerHTML=''; return; }
+    const products = new Set(state.palletLines.map(l=>l.product)).size;
+    const pUnits = state.palletLines.reduce((s,l)=>s+l.qty,0);
+    bar.style.display='block';
+    bar.innerHTML = `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <b>📦 Pallet in progress</b>
+      <span class="muted">${n} line(s) · ${products} product(s) · ${pUnits.toLocaleString()} base units${state.fromAsn?` · ${esc(state.fromAsn)}`:''} → decomposes at putaway into one LPN per line</span>
+      <div class="acts">
+        <button class="btn btn-sm btn-outline" id="plt-discard">DISCARD PALLET</button>
+        <button class="btn btn-sm btn-primary" id="plt-close">CLOSE PALLET &amp; PRINT LABEL</button>
+      </div></div>`;
+    $('plt-close').onclick = closePallet;
+    $('plt-discard').onclick = discardPallet;
+  }
+  // Validate ONE line fully (used by Add-to-pallet) — returns an error string or null.
+  function lineReady(ln){
+    const p = prod(ln.pid) || { name: ln.pid, track:{} };
+    if (ln.expected != null){ const now = lineNow(ln); if (now !== ln.expected && !ln.discReason) return `${p.name}: select a discrepancy reason (received ${now} vs ${ln.expected} outstanding).`; }
+    for (const lot of ln.lots){
+      if (lot.condition !== 'good') return `${p.name}: Hold / Damaged lots must be received as their own LPN — not on a putaway pallet.`;
+      if (isLotP(ln.pid) && !lot.lot)    return `Lot/batch required for ${p.name}.`;
+      if (isExpP(ln.pid) && !lot.expiry) return `Expiry required for ${p.name}.`;
+      // F9 — expired stock is never Good, so it can never go onto a putaway pallet.
+      if (isExpP(ln.pid) && isExpired({ expiry:lot.expiry })) return `${p.name}: lot ${lot.lot||'(expiry '+lot.expiry+')'} is EXPIRED — cannot be put on a putaway pallet. Receive it as Hold/Damaged, or refuse the delivery.`;
+      if (!(Number(lot.qty)>0))          return `Quantity must be > 0 for ${p.name}.`;
+      if (isSerial(ln.pid)){
+        const need = lotBase(ln, lot);
+        if (lot.serials.length !== need)               return `${p.name}: ${lot.serials.length}/${need} serials captured.`;
+        if (new Set(lot.serials).size !== lot.serials.length) return `${p.name}: duplicate serials captured.`;
+      }
+    }
+    return null;
+  }
+  function addLineToPallet(li){
+    const ln = state.lines[li]; if (!ln) return;
+    const err = lineReady(ln); if (err) { alert(err); return; }
+    ensureProduct(ln.pid);
+    ln.lots.forEach(lot => {
+      state.palletLines.push({ product:ln.pid, qty:lotBase(ln, lot), lot:lot.lot||'', expiry:lot.expiry||'',
+        serials:(lot.serials||[]).slice(), srcUid:ln._uid, asnLineIdx:(state.fromAsn ? ln.asnLineIdx : null) });
+    });
+    render();
+  }
+  function removeLineFromPallet(li){
+    const ln = state.lines[li]; if (!ln) return;
+    state.palletLines = state.palletLines.filter(pl => pl.srcUid !== ln._uid);
+    render();
+  }
+  function discardPallet(){
+    if (!state.palletLines.length) return;
+    if (!window.confirm(`Discard the pallet and its ${state.palletLines.length} line(s)? The source lines return to editable.`)) return;
+    state.palletLines = [];
+    render();
+  }
+  function closePallet(){
+    if (!state.palletLines.length) { alert('Add at least one product to the pallet first.'); return; }
+    const loc = stagingLocFor(state.site);
+    if (!loc) { alert('No staging (wait/put) location at this site — cannot stage a pallet.'); return; }
+    const asnRef = state.fromAsn || '';
+    const id = nextPalletId();
+    DB.pallets.push({ id, client:state.client, site:state.site, status:'to-putaway', loc, asn:asnRef,
+      lines: state.palletLines.map(pl => ({ product:pl.product, qty:pl.qty, lot:pl.lot, expiry:pl.expiry, serials:(pl.serials||[]).slice() })) });
+    // post received qty back to the ASN line(s) (deferred until close, mirroring the PWA)
+    if (state.fromAsn){
+      const a = DB.asns.find(x => x.id === state.fromAsn);
+      if (a){ const byIdx={}; state.palletLines.forEach(pl => { if (pl.asnLineIdx!=null) byIdx[pl.asnLineIdx]=(byIdx[pl.asnLineIdx]||0)+pl.qty; });
+        Object.keys(byIdx).forEach(idx => { const l=a.lines[+idx]; if (l) l.received=(l.received||0)+byIdx[idx]; }); }
+    }
+    const units = state.palletLines.reduce((s,l)=>s+l.qty,0);
+    logTxn({ type:'receive', lpn:id, product:'(mixed pallet)', qty:units, from:'', to:loc, site:state.site,
+      user:receiver(), ref:(asnRef||id), note:`ERP receive · mixed pallet · ${state.palletLines.length} line(s)${asnRef?' · '+asnRef:''}` });
+
+    const plt = palletById(id);
+    lastPallet = id;
+    // remove the source lines from the receipt (committed onto the pallet) by stable uid
+    const srcUids = new Set(state.palletLines.map(pl => pl.srcUid));
+    state.lines = state.lines.filter(ln => !srcUids.has(ln._uid));
+    state.palletLines = [];
+
+    $('plt-msg').innerHTML = `<b>${esc(id)}</b> — mixed pallet of <b>${palletTotals(plt).lines}</b> line(s) (${units.toLocaleString()} base units)${asnRef?` · ${esc(asnRef)}`:''} staged at <span class="mono">${esc(locName(loc))}</span> → <b>wait/put — ready for putaway</b>.`;
+    $('plt-rows').innerHTML = `<tr><th>Product</th><th>Lot</th><th>Expiry</th><th>Qty</th></tr>` +
+      plt.lines.map(ln => `<tr>
+        <td>${esc(prodLabel(ln.product))}</td>
+        <td class="mono">${isLotP(ln.product)?(esc(ln.lot)||'—'):'<span class="muted">n/a</span>'}</td>
+        <td>${isExpP(ln.product)?(esc(ln.expiry)||'—'):'<span class="muted">n/a</span>'}</td>
+        <td>${ln.qty.toLocaleString()} ${esc(baseUnitName(ln.product))}</td>
+      </tr>`).join('');
+    render();
+    $('pallet-modal').style.display = 'flex';
+  }
+
+  /* ---------- labels (shared barcode.js engine — identical content to the PWA) ---------- */
+  function lpnLabelHTML(l){
+    const p = prod(l.product) || {}; const t = p.track || {};
+    const lines = [ prodLabel(l.product), { k:'Client', v:dbName('clients', l.client) }, { k:'Quantity', v:`${l.qty} ${p.uom||''}` } ];
+    if (t.lot)    lines.push({ k:'Lot / batch', v:l.lot||'—' });
+    if (t.expiry) lines.push({ k:'Expiry', v:l.expiry||'—' });
+    lines.push({ k:'Location', v:locName(l.loc) });
+    lines.push({ k:'Status', v:l.status });
+    if (t.serial) lines.push({ k:'Serials', v:(l.serials||[]).join(', ')||'—' });
+    return labelHTML({ title:`LPN · ${l.id}`, code:l.id, lines });
+  }
+  function palletLabelHTML(plt){
+    const tot = palletTotals(plt);
+    const lines = [`Mixed pallet · ${tot.lines} products · ${tot.units} units${plt.asn?' · '+plt.asn:''}`].concat(
+      palletOpenLines(plt).map(ln => ({ k: (prod(ln.product)||{}).name || ln.product, v:`${ln.qty} ${(prod(ln.product)||{}).uom||''}` })));
+    return labelHTML({ title:`PALLET · ${plt.id}`, code:plt.id, lines });
+  }
+  function printLpn(id){ const l = DB.lpns.find(x=>x.id===id); if (l) printLabels([lpnLabelHTML(l)], 'LPN '+id); }
+
+  /* ---------- edits (use change, not input, to avoid focus loss while typing) ---------- */
+  $('lines').addEventListener('change', (e) => {
+    const t = e.target, f = t.dataset.f; if (!f) return;
+    if (f === 'discreason') { state.lines[+t.dataset.l].discReason = t.value; render(); return; }
+    if (f === 'ovrok')      { state.lines[+t.dataset.l].ovrApproved = t.checked; return; }   // F22 — no re-render (keep checkbox focus)
+    const lot = state.lines[+t.dataset.l].lots[+t.dataset.k];
+    if (f === 'lvl') lot.lvl = +t.value;
+    else if (f === 'qty') lot.qty = t.value;
+    else if (f === 'cond') lot.condition = t.value;
+    else if (f === 'split') lot.split = t.value;
+    else lot[f] = t.value;   // lot, expiry, reason
+    render();
+  });
+  $('lines').addEventListener('click', (e) => {
+    const a = e.target.closest('[data-act]'); if (!a) return;
+    const li = +a.dataset.l, ki = +a.dataset.k, act = a.dataset.act;
+    if (act === 'addlot')    { state.lines[li].lots.push(emptyLot()); render(); }
+    if (act === 'rmlot')     { state.lines[li].lots.splice(ki,1); render(); }
+    if (act === 'rmline')    { state.lines.splice(li,1); render(); }
+    if (act === 'serials')   { openSerials(li, ki); }
+    if (act === 'addpallet') { addLineToPallet(li); }
+    if (act === 'rmpallet')  { removeLineFromPallet(li); }
+  });
+
+  /* ---------- serials ---------- */
+  let serCtx = null;
+  function openSerials(li, ki){
+    serCtx = { li, ki };
+    const ln = state.lines[li], lot = ln.lots[ki], need = lotBase(ln, lot);
+    $('serial-ctx').innerHTML = `${esc(prod(ln.pid).name)} · lot <b>${esc(lot.lot||'—')}</b> · need <b>${need}</b> serials (= base qty).`;
+    $('serial-text').value = lot.serials.join('\n');
+    updateSerialCount(); $('serial-modal').style.display = 'flex';
+  }
+  function updateSerialCount(){
+    if (!serCtx) return;
+    const ln = state.lines[serCtx.li], lot = ln.lots[serCtx.ki], need = lotBase(ln, lot);
+    const arr = $('serial-text').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    const uniq = new Set(arr).size === arr.length;
+    const el = $('serial-count');
+    el.textContent = `${arr.length} / ${need}` + (uniq?'':' · dupes!');
+    el.className = 'mono ' + (arr.length===need && need>0 && uniq ? 'ser-ok' : 'ser-bad');
+  }
+  $('serial-text').addEventListener('input', updateSerialCount);
+  $('serial-auto').addEventListener('click', () => {
+    const ln = state.lines[serCtx.li], lot = ln.lots[serCtx.ki], need = lotBase(ln, lot);
+    const base = (prod(ln.pid).sku || 'SN').replace(/[^A-Z0-9]/gi,'').slice(0,4).toUpperCase() || 'SN';
+    const arr = []; for (let i=1;i<=need;i++) arr.push(`${base}-${String(i).padStart(4,'0')}`);
+    $('serial-text').value = arr.join('\n'); updateSerialCount();
+  });
+  $('serial-clear').addEventListener('click', () => { $('serial-text').value=''; updateSerialCount(); });
+  $('serial-save').addEventListener('click', () => {
+    const ln = state.lines[serCtx.li], lot = ln.lots[serCtx.ki];
+    const arr = $('serial-text').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    const dupe = arr.find((s,i)=>arr.indexOf(s)!==i);
+    if (dupe) { alert('Duplicate serial: ' + dupe); return; }
+    lot.serials = arr; close('serial-modal'); render();
+  });
+
+  /* ---------- add existing ---------- */
+  function openPick(){ $('pick-search').value=''; renderPick(); $('pick-modal').style.display='flex'; setTimeout(()=>$('pick-search').focus(),30); }
+  function renderPick(){
+    const q = ($('pick-search').value||'').trim().toLowerCase();
+    if (!q) { $('pick-count').textContent = 'Start typing to search this client’s products.'; $('pick-list').innerHTML=''; return; }
+    const list = CATALOG.filter(p => p.client === state.client && (p.name+' '+p.sku).toLowerCase().includes(q));
+    const total = list.length, CAP = 50, shown = list.slice(0, CAP);
+    $('pick-count').textContent = total ? `${total} match(es)${total>CAP?` — showing first ${CAP}, refine your search`:''}`
+      : 'No matching products. Use “New product (inline)” to create one.';
+    $('pick-list').innerHTML = shown.map(p => {
+      const inR = state.lines.some(l => l.pid === p.id);
+      return `<div class="pick-row"><div class="info"><b>${esc(p.name)}</b> <span class="muted mono">${esc(p.sku)}</span><br>
+        <span class="muted" style="font-size:12px">Base: ${esc(baseUnitName(p.id))}${isSerial(p.id)?' · serial-tracked':''}${inR?' · already on receipt':''}</span></div>
+        <button class="btn btn-sm ${inR?'btn-outline':'btn-primary'}" data-add="${p.id}">${inR?'ADD AGAIN':'ADD'}</button></div>`;
+    }).join('');
+  }
+  $('pick-search').addEventListener('input', renderPick);
+  $('pick-list').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-add]'); if (!b) return;
+    state.lines.push(mkLine({ pid:b.dataset.add }));   // manual line: no asnLineIdx
+    render(); renderPick();
+  });
+
+  /* ---------- inline new product (expiry ⇒ lot) ---------- */
+  function openNew(){
+    $('n-client').value = DB.clients.find(c=>c.id===state.client).name;
+    $('n-name').value=''; $('n-sku').value='';
+    $('n-base').innerHTML = DB.uoms.map(u => `<option value="${u.code}"${u.base?' selected':''}>${esc(u.name)} (${u.code})</option>`).join('');
+    $('n-pkg').innerHTML = `<option value="">Base unit only (no packaging)</option>` +
+      DB.packagings.filter(p=>p.shared).map(p => `<option value="${p.id}">Clone template: ${esc(p.name)}</option>`).join('');
+    $('n-lot').checked=true; $('n-exp').checked=true; $('n-ser').checked=false;
+    $('n-cat').innerHTML = `<option value="">— none —</option>` + DB.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    npFillSubs(); $('n-pmode').value='none'; npMode();
+    $('new-modal').style.display='flex'; setTimeout(()=>$('n-name').focus(),30);
+  }
+  function npFillSubs(){
+    const c = DB.categories.find(x=>x.id===$('n-cat').value);
+    $('n-sub').innerHTML = `<option value="">— none —</option>` + ((c&&c.subs)||[]).map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  }
+  function npMode(){
+    const m=$('n-pmode').value, wrap=$('n-pval-wrap');
+    if(m==='location'){
+      const bins=DB.locations.filter(l=>l.site===state.site && l.type==='storage' && l.status==='active');
+      wrap.innerHTML = bins.length
+        ? `<span>Location</span><select id="n-pval">${bins.map(b=>`<option value="${b.id}">${esc(b.structured)} · ${b.id}</option>`).join('')}</select>`
+        : `<span>Location</span><input id="n-pval" value="" placeholder="No active storage bins at this site" disabled>`;
+    } else if(m==='area'){
+      const zs = siteAreas(state.site);
+      wrap.innerHTML = zs.length
+        ? `<span>Area</span><select id="n-pval">${zs.map(z=>`<option value="${z.code}">${esc(z.name)}</option>`).join('')}</select>`
+        : `<span>Area</span><input id="n-pval" value="" placeholder="No storage areas — add on the Sites screen" disabled>`;
+    } else {
+      wrap.innerHTML = `<span>Location</span><select id="n-pval" disabled><option>—</option></select>`;
+    }
+  }
+  $('n-exp').addEventListener('change', e => { if (e.target.checked) $('n-lot').checked = true; });   // expiry ⇒ lot
+  $('n-lot').addEventListener('change', e => { if (!e.target.checked) $('n-exp').checked = false; });
+  $('new-save').addEventListener('click', () => {
+    const name = $('n-name').value.trim(); if (!name) { $('n-name').focus(); return; }
+    if ($('n-exp').checked && !$('n-lot').checked) $('n-lot').checked = true;   // enforce
+    const sku = $('n-sku').value.trim() || `NEW-${nextNewSku++}`;
+    const baseName = (DB.uoms.find(u=>u.code===$('n-base').value)||{name:'Each'}).name;
+    const pid = 'P-' + Date.now().toString().slice(-5);
+    const cat = $('n-cat').value || undefined, sub = $('n-sub').value || undefined;
+    const pmode = $('n-pmode').value; let preferred = [];
+    if (pmode !== 'none'){ const pv = $('n-pval') && $('n-pval').value; if (pv) preferred = [{ site:state.site, mode:pmode, ref:pv }]; }
+    CATALOG.push({ id:pid, client:state.client, sku, name, uom:baseName.toLowerCase(), barcode:'',
+      track:{ lot:$('n-lot').checked, expiry:$('n-exp').checked, serial:$('n-ser').checked },
+      category:cat, subCategory:sub, preferred });
+    const tplId = $('n-pkg').value;
+    if (tplId) { const tpl = DB.packagings.find(p=>p.id===tplId);
+      if (tpl) DB.packagings.push({ id:`PKG-${pid}`, name:`${name} — ${tpl.name}`, client:state.client, product:pid,
+        base:tpl.base, levels: tpl.levels.map(l=>({...l, barcode:'—'})) }); }
+    state.lines.push(mkLine({ pid }));
+    close('new-modal'); render();
+  });
+
+  /* ---------- confirm — live-mint own-LPN lines (pallet lines commit separately at Close pallet) ---------- */
+  function validate(){
+    const active = state.lines.filter(ln => !lineOnPallet(ln));
+    if (!active.length){
+      return state.palletLines.length
+        ? 'All lines are on the open pallet — use “Close pallet & print label” to receive them.'
+        : 'Add at least one product line.';
+    }
+    for (const ln of active) {
+      const p = prod(ln.pid) || { name: ln.pid, track:{} };
+      // F14 — the product must belong to the header client (mis-attributing client-owned stock is serious).
+      const owner = (DB.products.find(x=>x.id===ln.pid) || p).client;
+      if (owner && owner !== state.client)
+        return `${p.name} belongs to ${dbName('clients',owner)}, not ${dbName('clients',state.client)}. Remove it or switch the receipt's client — client-owned stock must not be mis-attributed.`;
+      if (ln.expected != null) {
+        const now = lineNow(ln);
+        if (now !== ln.expected && !ln.discReason) return `${p.name}: select a discrepancy reason (received ${now} vs ${ln.expected} outstanding).`;
+        // F22 — over-receipt beyond +10% requires the supervisor approval checkbox.
+        if (overReceiptExcess(ln) && !ln.ovrApproved)
+          return `${p.name}: over-receipt exceeds 10% of outstanding — tick “Approve over-receipt (supervisor)” to confirm.`;
+      }
+      for (const lot of ln.lots) {
+        if ((p.track&&p.track.lot) && !lot.lot)       return `Lot/batch required for ${p.name}.`;
+        if ((p.track&&p.track.expiry) && !lot.expiry) return `Expiry required for ${p.name}.`;
+        if (!(Number(lot.qty)>0)) return `Quantity must be > 0 for ${p.name}.`;
+        // F9 — an expired lot cannot be received as Good; force Hold/Damaged (or refuse the delivery).
+        if (isExpP(ln.pid) && lot.condition==='good' && isExpired({ expiry:lot.expiry }))
+          return `${p.name}: lot ${lot.lot||'(expiry '+lot.expiry+')'} is EXPIRED — it cannot be received as Good. Set Hold or Damaged, or refuse the delivery.`;
+        if (lot.condition !== 'good' && !lot.reason)  return `${p.name}: select a reason for the ${lot.condition==='damaged'?'damaged':'held'} lot.`;
+        if (isSerial(ln.pid)) {
+          const need = lotBase(ln, lot);
+          if (lot.serials.length !== need) return `${p.name}: ${lot.serials.length}/${need} serials captured.`;
+          if (new Set(lot.serials).size !== lot.serials.length) return `${p.name}: duplicate serials captured.`;
+        }
+      }
+    }
+    return null;
+  }
+  function confirm(){
+    const err = validate(); if (err) { alert(err); return; }
+    // F16 — duplicate supplier delivery-note ref + receiving against an already-closed ASN: warn, require confirm.
+    const deliveryRef = ($('h-deliveryref') && $('h-deliveryref').value || '').trim();
+    if (deliveryRef && receiptRefSeen(deliveryRef, state.client) &&
+        !window.confirm(`Delivery note "${deliveryRef}" was already received for this client. Receive it again anyway?`)) return;
+    if (state.fromAsn) {
+      const fa = DB.asns.find(x => x.id === state.fromAsn);
+      if (fa && asnStatus(fa)==='closed' &&
+          !window.confirm(`${state.fromAsn} is already CLOSED (fully received). Receive more against it anyway?`)) return;
+    }
+    const rcvSite = state.site, rcvClient = state.client;
+    const minted = [];
+    let nPut=0, nInsp=0, nQuar=0;
+
+    state.lines.filter(ln => !lineOnPallet(ln)).forEach(ln => {
+      ensureProduct(ln.pid);
+      const lv = levelsFor(ln.pid);
+      ln.lots.forEach(lot => {
+        const base = lotBase(ln, lot);
+        const splitIdx = (lot.split==='none') ? null : +lot.split;
+        const factor = (splitIdx!=null && lv[splitIdx] && lv[splitIdx].factor>0) ? lv[splitIdx].factor : 0;
+        const n = factor ? Math.max(1, Math.ceil(base/factor)) : 1;
+        const status = condStatus[lot.condition] || 'to-putaway';
+        const loc = (lot.condition==='damaged') ? quarantineLocFor(rcvSite) : stagingLocFor(rcvSite);
+        if (status==='to-putaway') nPut += base; else if (status==='to-inspect') nInsp += base; else nQuar += base;
+        const note = `ERP receive · ${lot.condition}${lot.reason?' · '+lot.reason:''}`;
+        let rem = base, si = 0;
+        for (let i=0;i<n;i++){
+          const q = (factor && i<n-1) ? factor : rem; rem -= q;
+          const id = nextLpnId();
+          const slice = isSerial(ln.pid) ? lot.serials.slice(si, si+q) : []; si += q;
+          DB.lpns.push({ id, client:rcvClient, site:rcvSite, product:ln.pid, qty:q, lot:lot.lot||'', expiry:lot.expiry||'', serials:slice, status, loc });
+          logTxn({ type:'receive', lpn:id, product:ln.pid, qty:q, from:'', to:loc, site:rcvSite, user:receiver(), ref:(state.fromAsn||'(blind)'), note });
+          minted.push({ id, qty:q, product:ln.pid, status, loc, lot:lot.lot||'', expiry:lot.expiry||'', condition:lot.condition });
+        }
+      });
+    });
+
+    // post received back to the ASN + optional close-short (cancel remainder)
+    let asnLine = '';
+    if (state.fromAsn) {
+      const a = DB.asns.find(x => x.id === state.fromAsn);
+      if (a){
+        const nowByIdx = {};
+        state.lines.forEach(ln => { if (lineOnPallet(ln) || ln.asnLineIdx == null) return; nowByIdx[ln.asnLineIdx] = (nowByIdx[ln.asnLineIdx]||0) + lineNow(ln); });
+        Object.keys(nowByIdx).forEach(idx => { const l=a.lines[+idx]; if (l) l.received = (l.received||0) + nowByIdx[idx]; });
+        const closeShort = $('close-short') && $('close-short').checked;
+        if (closeShort) a.lines.forEach(l => { if ((l.received||0) < l.qty) l.qty = l.received||0; });
+        const t = asnTotals(a), st = asnStatus(a);
+        const shortNote = closeShort ? ' — closed short, remaining cancelled' : '';
+        asnLine = `<div style="margin-top:10px">${esc(state.fromAsn)} → ${statusBadge(st)}
+          <span class="muted">· ${t.linesComplete} of ${t.lines} line(s) complete · ${t.rec} / ${t.exp} units${shortNote}</span></div>`;
+      }
+    }
+
+    // F24 — mint one GRN per confirmed receipt (lines built from what was actually minted).
+    let grnId = '';
+    if (minted.length) {
+      const g = grnCreate({ client:rcvClient, site:rcvSite, asn:state.fromAsn||'', deliveryRef,
+        supplier:(state.fromAsn ? (DB.asns.find(x=>x.id===state.fromAsn)||{}).supplier : '') || '',
+        lines: minted.map(m => ({ product:m.product, qty:m.qty, lot:m.lot, expiry:m.expiry, condition:m.condition, lpn:m.id })),
+        by:receiver() });
+      grnId = g.id;
+      const gl = $('done-grn'); if (gl) gl.href = `erp-gr-grn.html?grn=${encodeURIComponent(grnId)}`;
+    }
+
+    const parts = [];
+    if (nPut)  parts.push(`<b>${nPut}</b> to wait/put`);
+    if (nInsp) parts.push(`<b>${nInsp}</b> to inspection`);
+    if (nQuar) parts.push(`<b>${nQuar}</b> to quarantine`);
+    lastMint = minted.slice();
+    $('done-msg').innerHTML = `Minted <b>${minted.length}</b> license plate(s) into stock${parts.length?`. Routing: ${parts.join(' · ')}`:''}.${grnId?` GRN <b>${esc(grnId)}</b> issued for the client.`:''}${asnLine}`;
+    $('done-rows').innerHTML = `<tr><th>LPN</th><th>Product</th><th>Lot</th><th>Qty</th><th>Status</th><th></th></tr>` +
+      minted.map(m => `<tr>
+        <td class="mono">${esc(m.id)}</td>
+        <td>${esc((prod(m.product)||{}).name || m.product)}</td>
+        <td class="mono">${isLotP(m.product)?(esc(m.lot)||'—'):'<span class="muted">n/a</span>'}</td>
+        <td>${m.qty.toLocaleString()} ${esc(baseUnitName(m.product))}</td>
+        <td>${statusBadge(m.status)}</td>
+        <td><a class="add-lot" data-print="${esc(m.id)}">Print ⎙</a></td>
+      </tr>`).join('');
+
+    // committed own-LPN lines are now real stock — drop them so they can't be double-minted (pallet lines stay)
+    const srcUids = new Set(state.palletLines.map(pl => pl.srcUid));
+    state.lines = state.lines.filter(ln => srcUids.has(ln._uid));
+    render();
+    $('done-modal').style.display = 'flex';
+  }
+
+  /* ---------- wiring ---------- */
+  function close(id){ $(id).style.display = 'none'; }
+  document.querySelectorAll('[data-close]').forEach(x => x.addEventListener('click', () => close(x.dataset.close)));
+  document.querySelectorAll('.wms-modal').forEach(m => m.addEventListener('click', e => { if (e.target === m) m.style.display='none'; }));
+  $('h-client').addEventListener('change', e => { state.client=e.target.value; state.asn='blind'; state.fromAsn=null; state.lines=[]; state.palletLines=[]; fillHeader(); syncMode(); render(); });
+  $('h-site').addEventListener('change',   e => { state.site=e.target.value; state.asn='blind'; state.fromAsn=null; state.lines=[]; state.palletLines=[]; fillHeader(); syncMode(); render(); });
+  $('h-asn').addEventListener('change',    e => loadAsn(e.target.value));
+  $('btn-add-existing').addEventListener('click', openPick);
+  $('btn-add-new').addEventListener('click', openNew);
+  $('btn-confirm').addEventListener('click', confirm);
+  $('btn-confirm2').addEventListener('click', confirm);
+  $('btn-draft').addEventListener('click',  () => alert('Draft saved (mock).'));
+  $('btn-draft2').addEventListener('click', () => alert('Draft saved (mock).'));
+  $('btn-discard').addEventListener('click',() => { if (window.confirm('Discard this draft receipt?')) location.href='erp-gr-asn.html'; });
+  // done-modal: per-plate reprint + print-all
+  $('done-rows').addEventListener('click', e => { const a=e.target.closest('[data-print]'); if (a) printLpn(a.dataset.print); });
+  $('done-print-all').addEventListener('click', () => {
+    const labels = lastMint.map(m => { const l = DB.lpns.find(x=>x.id===m.id); return l ? lpnLabelHTML(l) : ''; }).filter(Boolean);
+    if (labels.length) printLabels(labels, 'LPN labels'); else alert('No labels to print.');
+  });
+  // pallet-modal: print the manifest label
+  $('plt-print').addEventListener('click', () => { const plt = palletById(lastPallet); if (plt) printLabels([palletLabelHTML(plt)], 'Pallet '+plt.id); });
+
+  /* ---------- F16 duplicate / closed-ASN guard banner ---------- */
+  function refreshDupBanner(){
+    const el = $('dup-banner'); if (!el) return;
+    const ref = ($('h-deliveryref') && $('h-deliveryref').value || '').trim();
+    const msgs = [];
+    if (ref && receiptRefSeen(ref, state.client)) msgs.push(`Delivery note <b>${esc(ref)}</b> was <b>already received</b> for this client — confirming will ask you to re-confirm.`);
+    if (state.fromAsn){ const a = DB.asns.find(x=>x.id===state.fromAsn); if (a && asnStatus(a)==='closed') msgs.push(`<b>${esc(state.fromAsn)}</b> is already <b>closed</b> (fully received).`); }
+    el.innerHTML = msgs.length ? ('⚠ ' + msgs.join(' ')) : '';
+    el.style.display = msgs.length ? 'block' : 'none';
+  }
+  $('h-deliveryref').addEventListener('input', refreshDupBanner);
+
+  /* ---------- F4 refuse delivery — NO stock minted ---------- */
+  function openRefuse(){
+    const a = state.fromAsn ? DB.asns.find(x=>x.id===state.fromAsn) : null;
+    $('refuse-ctx').innerHTML = a
+      ? `Refusing <b>${esc(a.id)}</b> · ${esc(dbName('clients',state.client))} · ${esc(dbName('sites',state.site))}.`
+      : `Blind refusal · ${esc(dbName('clients',state.client))} · ${esc(dbName('sites',state.site))} (no ASN).`;
+    $('refuse-reason').innerHTML = `<option value="">— select reason —</option>` + reasonsFor('refuse').map(r=>`<option>${esc(r)}</option>`).join('');
+    $('refuse-supplier').innerHTML = `<option value="">— none —</option>` + DB.suppliers.map(s=>`<option value="${s.id}"${(a&&s.id===a.supplier)?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('refuse-carrier').innerHTML = `<option value="">— none —</option>` + (DB.carriers||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('refuse-note').value = '';
+    $('refuse-modal').style.display = 'flex';
+  }
+  $('btn-refuse').addEventListener('click', openRefuse);
+  $('refuse-confirm').addEventListener('click', () => {
+    const reason = $('refuse-reason').value;
+    if (!reason){ alert('Select a refusal reason.'); return; }
+    const a = state.fromAsn ? DB.asns.find(x=>x.id===state.fromAsn) : null;
+    refuseDelivery({ asn:(a?a.id:''), client:state.client, site:state.site,
+      supplier:$('refuse-supplier').value || (a?a.supplier:''), carrier:$('refuse-carrier').value,
+      reason, note:$('refuse-note').value, by:receiver() });
+    close('refuse-modal');
+    $('refused-msg').innerHTML = a
+      ? `<b>${esc(a.id)}</b> refused — goods kept OUTSIDE the warehouse.`
+      : `Delivery refused — goods kept OUTSIDE the warehouse.`;
+    $('refused-modal').style.display = 'flex';
+  });
+
+  /* ---------- init ---------- */
+  const urlAsn = new URLSearchParams(location.search).get('asn');
+  if (urlAsn) { const a = DB.asns.find(x => x.id === urlAsn); if (a) { state.client=a.client; state.site=a.site; state.asn=urlAsn; } }
+  fillHeader();
+  if (urlAsn && DB.asns.find(x => x.id === urlAsn)) loadAsn(urlAsn);
+  else { syncMode(); render(); }
+})();
+</script>
+</body>
+</html>

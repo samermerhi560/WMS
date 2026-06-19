@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stock on Hand — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-soh" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Stock on Hand">
+  <div id="page-content">
+    <style>
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-ok    { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-warn  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-block { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      table.wf tr.blocked td { background:#fcf5f5; }
+      .print-only.phead { margin-bottom:10px; }
+    </style>
+
+    <div class="print-only phead"><h1 id="p-title">Stock on Hand</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Stock on Hand</h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">Current inventory derived live from license plates (LPNs), rolled up by client and product.
+      <b>Available</b> stock is shippable; <b>blocked</b> (quarantine / hold / damaged / expired) is excluded from allocation.</p>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Filters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>Site</span><select id="f-site"></select></label>
+        <label class="field"><span>Client</span><select id="f-client"></select></label>
+        <label class="field"><span>Storage area</span><select id="f-area"></select></label>
+        <label class="field"><span>Product / LPN / lot</span><input id="f-q" placeholder="Search…"></label>
+        <label class="field"><span>Status</span><select id="f-status">
+          <option value="onhand">All on-hand</option>
+          <option value="available">Available only</option>
+          <option value="allocatable">Allocatable only</option>
+          <option value="blocked">Blocked only</option>
+          <option value="expired">Expired only</option>
+        </select></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="table-toolbar no-print">
+      <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+      <button class="btn btn-sm btn-outline" onclick="window.print()">Print</button>
+      <button class="btn btn-sm" disabled>Columns</button>
+      <span class="chip">↑ Client · Product <span class="x">✕</span></span>
+      <span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th><span class="funnel">▾</span>LPN</th>
+        <th><span class="funnel">▾</span>Lot</th>
+        <th><span class="funnel">▾</span>Expiry</th>
+        <th><span class="funnel">▾</span>Location</th>
+        <th><span class="funnel">▾</span>Area</th>
+        <th><span class="funnel">▾</span>Status</th>
+        <th class="num">On-hand</th>
+        <th class="num">Free</th>
+        <th>Notes</th>
+      </tr></thead><tbody id="rows"></tbody></table>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const daysTo = d => d ? Math.round((new Date(d) - new Date(WMS_TODAY)) / 864e5) : null;
+    const state = { site:'S-LYON', client:'all', area:'all', q:'', status:'onhand' };
+
+    function areaOf(l){ const loc=DB.locations.find(x=>x.id===l.loc); return loc ? (loc.area||'') : ''; }
+
+    function rowsData(){
+      return onHandLpns(state.site).filter(l=>{
+        if (state.client!=='all' && l.client!==state.client) return false;
+        if (state.area!=='all'   && areaOf(l)!==state.area)   return false;
+        if (state.status==='available'   && l.status!=='available') return false;
+        if (state.status==='allocatable' && !isAllocatable(l))       return false;
+        if (state.status==='blocked'     && !isBlocked(l.status))    return false;
+        if (state.status==='expired'     && !isExpired(l))           return false;
+        if (state.q){
+          const p = DB.products.find(x=>x.id===l.product)||{};
+          const hay = `${l.id} ${l.lot||''} ${p.name||''} ${p.sku||''}`.toLowerCase();
+          if (!hay.includes(state.q)) return false;
+        }
+        return true;
+      });
+    }
+
+    function statusTag(l){
+      if (isExpired(l) && l.status==='available') return `<span class="tag tag-block">expired</span>`;
+      if (l.status==='available') return `<span class="tag tag-ok">available</span>`;
+      if (isBlocked(l.status))    return `<span class="tag tag-block">${esc(l.status)}</span>`;
+      return `<span class="tag">${esc(l.status)}</span>`;
+    }
+
+    function render(){
+      const list = rowsData();
+      // group: client -> product
+      const byClient = {};
+      list.forEach(l => { (byClient[l.client] = byClient[l.client] || []).push(l); });
+
+      let html = '';
+      Object.keys(byClient).sort((a,b)=>dbName('clients',a).localeCompare(dbName('clients',b))).forEach(cid=>{
+        const plates = byClient[cid];
+        const cUnits = plates.reduce((s,l)=>s+(l.qty||0),0);
+        html += `<tr class="group"><td colspan="9">▦ ${esc(dbName('clients',cid))}
+          <span class="gsum">${plates.length} plate(s) · ${cUnits} unit(s)</span></td></tr>`;
+        const byProd = {};
+        plates.forEach(l => { (byProd[l.product] = byProd[l.product] || []).push(l); });
+        Object.keys(byProd).sort((a,b)=>prodName(a).localeCompare(prodName(b))).forEach(pid=>{
+          const g = byProd[pid], p = DB.products.find(x=>x.id===pid)||{};
+          const tot = g.reduce((s,l)=>s+(l.qty||0),0);
+          const avail = g.filter(l=>l.status==='available'&&!isExpired(l)).reduce((s,l)=>s+(l.qty||0),0);
+          const blocked = g.filter(l=>isBlocked(l.status)||isExpired(l)).reduce((s,l)=>s+(l.qty||0),0);
+          html += `<tr class="group" style="background:var(--fill)"><td colspan="9" style="font-weight:600;padding-left:22px">${esc(prodName(pid))}
+            <span class="gsum">${tot} ${esc(p.uom||'')} · ${avail} available${blocked?` · ${blocked} blocked`:''}</span></td></tr>`;
+          g.sort((a,b)=>String(a.expiry||'9999').localeCompare(String(b.expiry||'9999'))).forEach(l=>{
+            const tracksExp = !!(p.track && p.track.expiry);
+            const dd = daysTo(l.expiry);
+            let expCell = tracksExp ? esc(l.expiry||'—') : '<span class="muted">n/a</span>';
+            if (tracksExp && dd!=null && dd<0)        expCell += ` <span class="tag tag-block">expired</span>`;
+            else if (tracksExp && dd!=null && dd<=30) expCell += ` <span class="tag tag-warn">${dd}d</span>`;
+            const blk = isBlocked(l.status) || isExpired(l);
+            html += `<tr class="${blk?'blocked':''}">
+              <td class="mono">${l.id}</td>
+              <td class="mono">${(p.track&&p.track.lot) ? esc(l.lot||'—') : '<span class="muted">n/a</span>'}</td>
+              <td>${expCell}</td>
+              <td class="mono">${esc(locName(l.loc))}</td>
+              <td>${esc(areaOf(l)||'—')}</td>
+              <td>${statusTag(l)}</td>
+              <td class="num">${l.qty}</td>
+              <td class="num">${l.status==='available'?lpnAvail(l.id):'<span class="muted">—</span>'}</td>
+              <td>${noteFor(l.id) || '<span class="muted">—</span>'}</td>
+            </tr>`;
+          });
+        });
+      });
+      $('rows').innerHTML = html || `<tr><td colspan="9" class="muted" style="padding:18px">No stock matches the filters.</td></tr>`;
+
+      // KPIs
+      const plates = list.length;
+      const units = list.reduce((s,l)=>s+(l.qty||0),0);
+      const availU = list.filter(l=>l.status==='available'&&!isExpired(l)).reduce((s,l)=>s+(l.qty||0),0);
+      const blockedU = list.filter(l=>isBlocked(l.status)).reduce((s,l)=>s+(l.qty||0),0);
+      const expiredU = list.filter(l=>isExpired(l)).reduce((s,l)=>s+(l.qty||0),0);
+      const skus = new Set(list.map(l=>l.product)).size;
+      $('kpis').innerHTML = `
+        <div class="kpi"><span class="k-label">Plates</span><span class="k-val">${plates}</span><span class="k-sub">${skus} product(s)</span></div>
+        <div class="kpi"><span class="k-label">Units on-hand</span><span class="k-val">${units}</span></div>
+        <div class="kpi k-good"><span class="k-label">Available</span><span class="k-val">${availU}</span><span class="k-sub">shippable</span></div>
+        <div class="kpi k-bad"><span class="k-label">Blocked</span><span class="k-val">${blockedU}</span><span class="k-sub">excluded from allocation</span></div>
+        <div class="kpi k-warn"><span class="k-label">Expired</span><span class="k-val">${expiredU}</span><span class="k-sub">past expiry, on-hand</span></div>`;
+      $('summary').textContent = `${plates} plate(s) · ${units} unit(s) at ${dbName('sites',state.site)}`;
+
+      // print header filter summary
+      const fdesc = [`Site: ${dbName('sites',state.site)}`,
+        `Client: ${state.client==='all'?'All':dbName('clients',state.client)}`,
+        `Area: ${state.area==='all'?'All':state.area}`,
+        `Status: ${state.status}`].join('  ·  ');
+      $('p-filters').textContent = fdesc + '  ·  as of ' + WMS_TODAY;
+    }
+
+    function fillAreas(){
+      const areas = siteAreas(state.site);
+      $('f-area').innerHTML = `<option value="all">All areas</option>` +
+        areas.map(a=>`<option value="${a.code}">${esc(a.code)} — ${esc(a.name)}</option>`).join('');
+      if (typeof $('f-area')._ssSync==='function') $('f-area')._ssSync();
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-site').innerHTML   = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    fillAreas();
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; state.area='all'; fillAreas(); render(); });
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; render(); });
+    $('f-area').addEventListener('change',   e=>{ state.area=e.target.value; render(); });
+    $('f-status').addEventListener('change', e=>{ state.status=e.target.value; render(); });
+    $('f-q').addEventListener('input',       e=>{ state.q=e.target.value.trim().toLowerCase(); render(); });
+    render();
+  </script>
+</body></html>

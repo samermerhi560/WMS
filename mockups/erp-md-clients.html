@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clients — WMS</title>
+  <link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-clients"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Clients">
+  <div id="page-content">
+
+    <style>
+      .chk-grid { display:flex; flex-wrap:wrap; gap:10px; }
+      .chk-grid label { display:inline-flex; align-items:center; gap:8px; padding:8px 12px;
+        border:1px solid var(--line-soft); border-radius:var(--radius); cursor:pointer; font-size:13px; }
+      .chk-grid label:hover { background:var(--brand-tint2); }
+      .chk-grid input { width:auto; }
+      .sites-cell { font-size:12.5px; }
+    </style>
+
+    <!-- LIST VIEW -->
+    <div id="view-list">
+      <div class="page-head">
+        <h1>Clients</h1>
+        <div class="acts">
+          <button class="btn btn-outline" onclick="show('edit')">Create</button>
+          <button class="btn" disabled>Export</button>
+          <button class="btn" disabled>Archive</button>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <a href="#" class="active" onclick="return false">All</a>
+        <a href="#" onclick="return false">Active</a>
+        <a href="#" onclick="return false">Archived</a>
+      </div>
+
+      <div class="panel">
+        <div class="filter-head">
+          <span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span>
+        </div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Client code</span><input placeholder=""></label>
+          <label class="field"><span>Name</span><input placeholder=""></label>
+          <label class="field"><span>Contact</span><input placeholder=""></label>
+          <label class="field"><span>Status</span>
+            <select><option>Any</option><option>Active</option><option>Archived</option></select></label>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button>
+        <button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button>
+        <button class="btn btn-sm" disabled>Reset selected</button>
+        <span class="refresh">⟳</span>
+      </div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf">
+          <thead><tr>
+            <th style="width:30px"><input type="checkbox" style="width:auto"></th>
+            <th style="width:28px">⚙</th>
+            <th><span class="funnel">▾</span>Code</th>
+            <th><span class="funnel">▾</span>Name</th>
+            <th><span class="funnel">▾</span>Contact</th>
+            <th><span class="funnel">▾</span>Email</th>
+            <th><span class="funnel">▾</span>Products</th>
+            <th><span class="funnel">▾</span>Sites</th>
+            <th><span class="funnel">▾</span>Status</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- EDIT VIEW -->
+    <div id="view-edit" style="display:none">
+      <div class="page-head">
+        <h1>Edit client</h1>
+        <div class="acts">
+          <button class="btn btn-primary">Save client</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+        </div>
+      </div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+
+      <div class="panel">
+        <fieldset><legend>Identity</legend>
+          <div class="field-row">
+            <label class="field"><span>Client code <span class="req">*</span></span><input value="C-ACME"></label>
+            <label class="field"><span>Status</span>
+              <select><option>Active</option><option>Archived</option></select></label>
+          </div>
+          <div class="field-row">
+            <label class="field"><span>Display name <span class="req">*</span></span><input value="ACME Foods Ltd"></label>
+            <label class="field"><span>Legal name</span><input value="ACME Foods Limited"></label>
+          </div>
+        </fieldset>
+
+        <fieldset><legend>Operating sites <span class="req">*</span></legend>
+          <p class="muted" style="margin-top:0;font-size:12px">Warehouses this client operates at. Scopes its products, stock, preferred storage locations, and reports. Multi-select.</p>
+          <div class="chk-grid" id="client-sites"></div>
+        </fieldset>
+
+        <fieldset><legend>Outbound policy</legend>
+          <div class="field-row">
+            <label class="field"><span>Short-shipment handling</span>
+              <select id="e-backorder">
+                <option value="false" selected>Short-close — ship what's available, cancel the rest</option>
+                <option value="true">Back-order — keep the remainder open, fulfil when stock arrives</option>
+              </select></label>
+          </div>
+          <p class="muted" style="margin-top:0;font-size:12px">When an outbound order can't be fully shipped: <b>short-close</b> ships the available quantity and cancels the shortfall (the client re-orders); <b>back-order</b> keeps the remainder as an open requirement that re-allocates and ships on a later delivery note. Applies across the Allocation, Pick/Dispatch and Express Fulfil screens. <i>(Seed: ACME = short-close, Globex = back-order.)</i></p>
+        </fieldset>
+
+        <fieldset><legend>Primary contact</legend>
+          <div class="field-row">
+            <label class="field"><span>Contact person</span><input value="Marie Dubois"></label>
+            <label class="field"><span>Email</span><input value="ops@acmefoods.example"></label>
+            <label class="field"><span>Phone</span><input value="+41 22 555 0101"></label>
+          </div>
+          <label class="field"><span>Address</span><textarea rows="2">Rue du Commerce 12, 1204 Genève, Switzerland</textarea></label>
+        </fieldset>
+
+        <fieldset><legend>Notes</legend>
+          <label class="field"><span>Internal notes</span><textarea rows="2" placeholder="Optional"></textarea></label>
+        </fieldset>
+
+        <div id="e-notes" style="margin:10px 0"></div>
+
+        <p class="wf-note muted">Client + site scoping is applied to every downstream record (products, stock, orders, reports).</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/erp-shell.js"></script>
+  <script>
+    (function(){
+      document.getElementById('rows').innerHTML = DB.clients.map(c => {
+        const prods = DB.products.filter(p => p.client === c.id).length;
+        return `<tr>
+          <td><input type="checkbox" style="width:auto"></td>
+          <td class="dots">⋮</td>
+          <td class="mono">${c.id}</td>
+          <td><a href="#" onclick="show('edit');return false">${c.name}</a></td>
+          <td>${c.contact}</td>
+          <td class="muted">${c.email}</td>
+          <td>${prods}</td>
+          <td class="sites-cell">${(c.sites||[]).map(s=>dbName('sites',s)).join(', ') || '<span class="muted">—</span>'}</td>
+          <td><span class="badge ${c.status==='active'?'b-available':''}">${c.status}</span></td>
+        </tr>`;
+      }).join('');
+
+      // Sites multi-select — edit form represents C-ACME
+      const editing = DB.clients.find(c => c.id === 'C-ACME') || DB.clients[0];
+      document.getElementById('client-sites').innerHTML = DB.sites.map(s =>
+        `<label><input type="checkbox" ${ (editing.sites||[]).includes(s.id) ? 'checked' : '' }> ${s.name} <span class="muted mono" style="font-size:11px">${s.id}</span></label>`
+      ).join('');
+
+      document.getElementById('e-notes').innerHTML = noteField({ ref: editing.id, level:'header', title:'Notes (optional)' });
+    })();
+    function show(v){
+      document.getElementById('view-list').style.display = v==='list' ? '' : 'none';
+      document.getElementById('view-edit').style.display = v==='edit' ? '' : 'none';
+      window.scrollTo(0,0);
+    }
+    function toggleFilter(btn){
+      const f = document.getElementById('filters');
+      const hidden = f.style.display === 'none';
+      f.style.display = hidden ? '' : 'none';
+      btn.textContent = hidden ? 'Hide filter' : 'Show filter';
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pick / Dispatch — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Pick / Dispatch" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <!-- screen-local styling MUST live inside #page-content (the shell rebuilds body from it only) -->
+    <style>
+      .ck { display:flex; gap:14px; margin:8px 0 10px; font-size:13px; flex-wrap:wrap; }
+      .ck .on  { color:#235c25; font-weight:600; }
+      .ck .off { color:var(--ink-faint); }
+      .ck .ovr { color:#8a6d00; font-weight:600; }
+      .prov { font-size:12px; margin-top:6px; padding:6px 9px; border-radius:var(--radius); }
+      .prov.res { background:#e6f3e7; color:#235c25; }
+      .prov.fefo{ background:var(--fill); color:var(--ink-soft); }
+      .pk-line-h { font-weight:700; font-size:13px; margin:12px 2px 6px; }
+      .pk-line-h small { font-weight:400; color:var(--ink-soft); }
+      .sum-row { display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px solid var(--line-soft); font-size:13px; }
+      .sum-row:last-child { border-bottom:none; }
+      .sum-row .q { font-weight:700; white-space:nowrap; }
+      .short { color:#8a6d00; font-weight:600; }
+    </style>
+    <div id="pick-flash" class="sb-msg" style="display:none"></div>
+    <div id="pick"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('pick');
+    const TODAY = '2026-06-15';                       // mocked "today" (matches the ERP screens)
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const uomOf = pid => prodUom(pid) || '';
+    // S.pick = { li, ri, qty, serials, scanLoc, scanUnit, override } while picking one allocated row.
+    const S = { view:'list', tab:'open', orderId:null, work:null, carrier:'', pick:null, noteId:null, last:null, banner:null };
+
+    function flash(t){ const m=$('pick-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('pick-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('pick-flash'); if(m) m.style.display='none'; }
+
+    const fulfillable = o => ['open','allocated','partial','picking','picked'].includes(o.status);
+    const orderById = id => DB.outbound.find(o=>o.id===id) || null;
+    const isPreAllocated = o => o.lines.some(l=>!l.cancelled && (l.alloc||[]).length>0);   // office reserved specific stock
+
+    /* ---------- build a per-order PICK PLAN (work model) ----------
+       Honour an existing ERP allocation (line.alloc[] = the pick list) when present; otherwise auto-allocate
+       the remaining qty by FEFO/FIFO (open / back-ordered orders) — same candidates the ERP allocation uses.
+       Mirrors erp-so-fulfil.buildLine so the commit logic stays identical. */
+    function mkRow(lpn, lot, expiry, from, take, serial){
+      const l = lpnById(lpn) || {};
+      const ser = serial ? ((l.serials && l.serials.length) ? l.serials.slice(0, take).join(', ') : '') : '';
+      return { lpn, lot:lot||'', expiry:expiry||'', from, take, picked:0, done:false, serials:ser };
+    }
+    function buildWork(o){
+      return o.lines.map(line => {
+        const p = DB.products.find(x=>x.id===line.product) || {};
+        if (line.cancelled) return { product:line.product, cancelled:true, ordered:line.qty||0, shipped:lineShipped(line), uom:p.uom||'', usesExpiry:false, serial:false, target:0, rows:[] };
+        const usesExpiry = tracksExpiry(line.product), serial = tracksSerial(line.product);
+        let rows, target;
+        if ((line.alloc||[]).length){                 // honour the ERP allocation (classic path → PWA picks the list)
+          rows = line.alloc.map(a => mkRow(a.lpn, a.lot, a.expiry, a.from, a.qty, serial));
+          target = rows.reduce((s,r)=>s+r.take,0);
+        } else {                                       // auto FEFO/FIFO the remaining qty (open / partial)
+          const { list } = outboundCandidates(line.product, o.client, o.site, o.id);
+          let need = o.fullStockOut ? Infinity : lineRemaining(line);
+          rows = [];
+          for (const l of list){
+            if (!o.fullStockOut && need<=0) break;
+            const free = lpnAvail(l.id, o.id);
+            const take = o.fullStockOut ? free : Math.max(0, Math.min(free, need));
+            if (take<=0) continue;
+            rows.push(mkRow(l.id, l.lot, l.expiry, l.loc, take, serial));
+            if (!o.fullStockOut) need -= take;
+          }
+          target = o.fullStockOut ? rows.reduce((s,r)=>s+r.take,0) : lineRemaining(line);
+        }
+        return { product:line.product, cancelled:false, ordered:line.qty||0, shipped:lineShipped(line),
+                 uom:p.uom||'', usesExpiry, serial, target, rows };
+      });
+    }
+    const linePicked = w => w.rows.reduce((s,r)=>s+(r.done?(+r.picked||0):0),0);
+    const orderIssued = () => (S.work||[]).reduce((s,w)=>s+(w.cancelled?0:linePicked(w)),0);
+    const anyPicked = () => (S.work||[]).some(w=>w.rows.some(r=>r.done && r.picked>0));
+
+    /* ============================================================ LIST (tabs: To pick · Dispatched) */
+    function tabsHtml(){
+      return `<div class="tabs">
+        <a href="#" id="t-open" class="${S.tab!=='done'?'active':''}">To pick</a>
+        <a href="#" id="t-done" class="${S.tab==='done'?'active':''}">Dispatched</a></div>`;
+    }
+    function wireTabs(){
+      const o=$('t-open'), d=$('t-done');
+      if(o) o.onclick=e=>{ e.preventDefault(); S.tab='open'; render(); };
+      if(d) d.onclick=e=>{ e.preventDefault(); S.tab='done'; render(); };
+    }
+    function renderList(){ if (S.tab==='done') return renderDispatched(); renderToPick(); }
+
+    function renderToPick(){
+      const list = DB.outbound.filter(o => o.site===site() && o.client===client() && fulfillable(o) && (!PWA.mineOnly() || isMine(o)));
+      const cards = list.length ? list.map(o=>{
+        const t = outTotals(o);
+        const need = o.fullStockOut ? 'all available' : (o.status==='partial' ? `${t.remaining} of ${t.req}` : `${t.req}`);
+        const tag = o.status==='partial' ? '<span class="badge b-allocated" title="Back-order remainder — re-reserved by FEFO">back-order</span>'
+                   : isPreAllocated(o) ? '<span class="badge b-allocated" title="Stock reserved by the office — ready to pick">reserved</span>'
+                   : '<span class="badge b-toputaway" title="Not yet allocated — the system reserves by FEFO when you open it">to pick</span>';
+        // Assignee row: who it's dispatched to + a self-claim / release control (role-gated in the coding phase).
+        const who   = o.assignee ? `${esc(assigneeName(o.assignee))}${isMine(o)?' · me':''}` : '<span class="muted">Any</span>';
+        const claim = o.assignee
+          ? (isMine(o) ? ` · <a href="#" class="claim-btn" data-rel="${o.id}">Release</a>` : '')
+          : ` · <a href="#" class="claim-btn" data-claim="${o.id}">Claim</a>`;
+        return `<div class="task" data-order="${o.id}"><span class="meta"><b>${esc(o.id)}</b>
+          <small>${esc(consigneeName(o.shipTo))} · ${o.lines.length} line(s) · ${esc(need)} ${o.fullStockOut?'':esc(uomOf(o.lines[0]&&o.lines[0].product))}</small>
+          <small style="margin-top:3px">👤 ${who}${claim}</small></span>
+          ${tag}</div>`;
+      }).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No orders to pick at ${esc(PWA.siteName())}${PWA.mineOnly()?' assigned to you — switch to <b>All</b> above to see every order':''}.</p></div>`;
+      root.innerHTML = tabsHtml() +
+        PWAScan.field({ id:'sf-pick', prompt:'Scan an order to pick', autofocus:true, placeholder:'OUT-7001 · PO-AC-5567',
+          kinds:['order'], list:list.map(o=>({value:o.id,label:o.id,sub:consigneeName(o.shipTo)})), onScan:onScanOrder })
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">To pick at ${esc(PWA.siteName())} (${list.length})</p>${cards}`
+        + `<div class="spacer"></div><a class="task is-soon" href="pwa-so-dispatch.html" style="text-decoration:none"><span class="meta"><b>No ERP order? ＋ Ad-hoc dispatch</b><small>Controlled emergency outbound — creates the order on the spot · role-gated</small></span><span>›</span></a>`;
+      wireTabs();
+      root.querySelectorAll('[data-order]').forEach(el=>el.onclick=()=>openOrder(el.dataset.order));
+      // self-claim / release — stop the click bubbling to the card's openOrder
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{
+        ev.preventDefault(); ev.stopPropagation();
+        const o = DB.outbound.find(x=>x.id===(el.dataset.claim||el.dataset.rel)); if(!o) return;
+        o.assignee = el.dataset.claim ? DB.currentUserId : '';
+        PWA.save(); renderList();
+      });
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanOrder(code, r){
+      if (r && r.type==='order'){ const o=r.entity;
+        if (!fulfillable(o)) return flash(`${o.id} is ${o.status} — nothing to pick.`);
+        if (o.site!==site() || o.client!==client()) return flash(`${o.id} belongs to another client/site.`);
+        openOrder(o.id);
+      } else flash('Scan an outbound order (OUT-… or its PO reference).');
+    }
+
+    /* ---------- Dispatched (delivery-note history; tap to view) — mirrors the Putaway "Completed" tab ---------- */
+    function dispatchedList(){
+      const out=[];
+      DB.outbound.filter(o=>o.site===site() && o.client===client()).forEach(o=>(o.shipments||[]).forEach(s=>out.push({ s, o })));
+      return out.sort((a,b)=> String(b.s.date).localeCompare(String(a.s.date)) || String(b.s.id).localeCompare(String(a.s.id)));
+    }
+    const shipUnits = s => (s.lines||[]).reduce((t,l)=>t+(+l.picked||0),0);
+    function outcomeTag(o){
+      return o.shortClosed ? '<span class="badge b-cancelled">short-closed</span>'
+           : o.status==='partial' ? '<span class="badge b-allocated">back-order</span>'
+           : '<span class="badge b-available">complete</span>';
+    }
+    function renderDispatched(){
+      const list = dispatchedList();
+      const cards = list.length ? list.map(({s,o})=>
+        `<div class="task" data-note="${esc(s.id)}"><span class="meta"><b>${esc(s.id)}</b>
+          <small>${esc(o.id)} → ${esc(consigneeName(o.shipTo))} · ${shipUnits(s)} unit(s)${s.date?' · '+esc(s.date):''}</small></span>
+          ${outcomeTag(o)}</div>`).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No dispatches yet at ${esc(PWA.siteName())}. Delivery notes appear here once you dispatch.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Dispatched delivery notes (${list.length})</p>${cards}`
+        + (list.length?`<p class="scan-hint" style="text-align:left">Tap a delivery note to view what shipped.</p>`:'');
+      wireTabs();
+      root.querySelectorAll('[data-note]').forEach(el=>el.onclick=()=>{ S.noteId=el.dataset.note; S.view='note'; render(); });
+    }
+    function renderNote(){
+      const found = dispatchedList().find(x=>x.s.id===S.noteId);
+      if(!found){ S.view='list'; S.tab='done'; return render(); }
+      const { s, o } = found;
+      const lines = (s.lines||[]).map(sl=>{
+        const ser = (sl.alloc||[]).map(a=>a.serials).filter(Boolean).join(', ');
+        return `<div class="sum-row"><span>${esc(prodName(sl.product))}${ser?`<br><span class="muted" style="font-size:11px">serials ${esc(ser)}</span>`:''}</span><span class="q">${sl.picked} ${esc(uomOf(sl.product))}</span></div>`;
+      }).join('');
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b>Delivery note <span class="mono">${esc(s.id)}</span></b> ${outcomeTag(o)}
+          <div class="muted" style="margin-top:4px">${esc(o.id)}${o.ref?' · '+esc(o.ref):''} · ${esc(s.date||'')}</div>
+          <div class="muted">Ship to <b>${esc(consigneeName(o.shipTo))}</b></div>
+          <div class="muted">Carrier: ${esc((DB.carriers.find(c=>c.id===s.carrier)||{}).name || s.carrier || '—')}</div></div>
+        <div class="panel" style="margin-bottom:10px">${lines || '<span class="muted">—</span>'}
+          <div class="sum-row" style="border-top:2px solid var(--line);margin-top:4px;padding-top:8px"><span><b>Total issued</b></span><span class="q">${shipUnits(s)} unit(s)</span></div></div>
+        <button class="btn btn-outline" id="nt-back" style="width:100%">‹ Back to dispatched</button>`;
+      $('nt-back').onclick=()=>{ S.noteId=null; S.view='list'; S.tab='done'; render(); };
+    }
+
+    /* ============================================================ ORDER — the pick list */
+    function openOrder(id){ const o=orderById(id); if(!o) return; S.orderId=id; S.work=buildWork(o); S.carrier=''; S.pick=null; S.view='order'; render(); }
+    function renderOrder(){
+      const o=orderById(S.orderId); if(!o){ S.view='list'; return render(); }
+      const pre = isPreAllocated(o);
+      let body='';
+      S.work.forEach((w,li)=>{
+        if (w.cancelled){ body += `<div class="pk-line-h">${esc(prodName(w.product))} <span class="badge b-cancelled">line cancelled</span></div>`; return; }
+        const tracks = w.serial ? 'lot+exp+serial' : w.usesExpiry ? 'lot+exp' : tracksLot(w.product) ? 'lot' : 'no tracking';
+        body += `<div class="pk-line-h">${esc(prodName(w.product))} <small>· pick ${w.target} ${esc(w.uom)} · ${esc(tracks)}${w.shipped>0?` · ${w.shipped} already shipped`:''}</small></div>`;
+        if (!w.rows.length){ body += `<p class="scan-hint" style="text-align:left;color:var(--bad)">No available stock — every plate is reserved, expired, frozen or blocked.</p>`; return; }
+        body += w.rows.map((r,ri)=>{
+          const badge = !r.done ? `<span class="badge b-toputaway">pick ${r.take}</span>`
+            : r.picked>=r.take ? `<span class="badge b-available">✓ ${r.picked}</span>`
+            : r.picked>0 ? `<span class="badge b-allocated">short ${r.picked}/${r.take}</span>`
+            : `<span class="badge b-cancelled">skipped</span>`;
+          return `<div class="task" data-pick="${li}:${ri}"><span class="meta">
+            <b>${esc(locName(r.from))} · ${esc(r.lpn)}</b>
+            <small>pick ${r.take} ${esc(w.uom)}${tracksLot(w.product)&&r.lot?' · lot '+esc(r.lot):''}${w.usesExpiry&&r.expiry?' · exp '+esc(r.expiry):''}${w.serial?' · serial-tracked':''}</small></span>
+            ${badge}</div>`;
+        }).join('');
+      });
+      const issued = orderIssued(), canLoad = anyPicked();
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(o.id)}</b> ${statusBadge(o.status)}
+          <div class="muted" style="margin-top:4px">Ship to <b>${esc(consigneeName(o.shipTo))}</b>${o.ref?' · '+esc(o.ref):''}</div>
+          <div class="muted">${esc(dbName('clients',o.client))} · ${esc(PWA.siteName())}</div>
+          <div class="prov ${pre?'res':'fefo'}">${pre
+            ? '✓ Stock <b>reserved by the office</b> (allocation) — pick the reserved plate(s) below.'
+            : 'Not pre-allocated — the system <b>reserved stock by FEFO</b> for you to pick.'}</div></div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Tap a line to scan &amp; pick it</p>
+        ${body}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="to-load" style="width:100%"${canLoad?'':' disabled'}>Load &amp; dispatch ›${issued?` (${issued} picked)`:''}</button>
+        <button class="btn btn-outline" id="ord-back" style="width:100%">‹ Back to orders</button>`;
+      root.querySelectorAll('[data-pick]').forEach(el=>el.onclick=()=>{ const [li,ri]=el.dataset.pick.split(':').map(Number); openPick(li,ri); });
+      $('to-load').onclick=()=>{ if(!anyPicked()) return flash('Pick at least one line first.'); S.view='load'; render(); };
+      $('ord-back').onclick=()=>{ S.view='list'; S.orderId=null; S.work=null; render(); };
+    }
+
+    /* ============================================================ PICK one row (scan loc → scan unit → qty → serials) */
+    function openPick(li,ri){
+      const w=S.work[li], r=w.rows[ri];
+      S.pick={ li, ri, qty:(r.done?r.picked:r.take), serials:r.serials||'', scanLoc:false, scanUnit:false, override:false };
+      S.view='pick'; render();
+    }
+    function renderPick(){
+      const w=S.work[S.pick.li], r=w.rows[S.pick.ri], pk=S.pick;
+      const scanned = pk.scanLoc && pk.scanUnit, canConfirm = scanned || pk.override;   // scan is the mis-pick guard
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px">
+          <b>Pick ${r.take} ${esc(w.uom)} of ${esc(prodName(w.product))}</b>
+          <div class="muted" style="margin-top:4px">${tracksLot(w.product)&&r.lot?'lot '+esc(r.lot)+' · ':''}${w.usesExpiry&&r.expiry?'exp '+esc(r.expiry)+' · ':''}from <b>${esc(locName(r.from))}</b> · <span class="mono">${esc(r.lpn)}</span></div>
+        </div>
+        ${PWAScan.field({ id:'sf-pickrow', prompt:'Scan the bin, then the LPN', placeholder:esc(locName(r.from))+' · '+esc(r.lpn),
+            kinds:['location','lpn','product'],
+            list:[{value:r.from,label:locName(r.from),sub:'bin'},{value:r.lpn,label:r.lpn,sub:'LPN'}], onScan:onScanRow })}
+        <div class="ck"><span class="${pk.scanLoc?'on':'off'}">📍 Location ${pk.scanLoc?'✓':'— scan'}</span>
+          <span class="${pk.scanUnit?'on':'off'}">🏷 ${w.serial?'Unit':'LPN'} ${pk.scanUnit?'✓':'— scan'}</span>
+          ${pk.override?'<span class="ovr">⚠ manual override</span>':''}</div>
+        <label class="field"><span>Quantity picked (of ${r.take})</span>
+          <input id="pk-qty" type="number" min="0" max="${r.take}" step="1" value="${pk.qty}"></label>
+        <div class="muted" id="pk-note" style="margin:-4px 0 10px"></div>
+        ${w.serial?`<label class="field"><span>Serials picked <span class="req">*</span></span>
+          <textarea id="pk-ser" rows="2" placeholder="scan / enter serials">${esc(pk.serials)}</textarea></label>
+          <div class="muted" style="margin:-4px 0 10px;font-size:12px">Record ${r.take} serial(s) — scanned off the units.</div>`:''}
+        <button class="btn btn-primary" id="pk-confirm" style="width:100%"${canConfirm?'':' disabled'}>Confirm pick</button>
+        ${canConfirm?'':`<button class="btn btn-outline btn-sm" id="pk-override" style="width:100%">Can’t scan? Confirm manually (override)</button>`}
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="btn btn-outline btn-sm" id="pk-damage" style="flex:1">Report damage</button>
+          <button class="btn btn-outline btn-sm" id="pk-nf" style="flex:1;color:var(--bad)">Stock not found</button></div>
+        <button class="btn btn-outline" id="pk-back" style="width:100%">‹ Back to pick list</button>`;
+      const qi=$('pk-qty'); if(qi) qi.oninput=()=>{ let v=Math.floor(Number(qi.value)||0); if(v<0)v=0; if(v>r.take)v=r.take; pk.qty=v; paintPickNote(r,w); };
+      const se=$('pk-ser'); if(se) se.oninput=()=>{ pk.serials=se.value; };
+      $('pk-confirm').onclick=()=>commitPick();
+      const ov=$('pk-override'); if(ov) ov.onclick=()=>{ pk.override=true; render(); };
+      $('pk-damage').onclick=()=>reportDamage();
+      $('pk-nf').onclick=()=>stockNotFound();
+      $('pk-back').onclick=()=>{ S.pick=null; S.view='order'; render(); };
+      paintPickNote(r,w);
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function paintPickNote(r,w){
+      const n=$('pk-note'); if(!n) return;
+      n.innerHTML = S.pick.qty>=r.take ? `Picking the full allocation (<b>${r.take}</b> ${esc(w.uom)}).`
+        : S.pick.qty>0 ? `<span class="short">Short pick — <b>${S.pick.qty}</b> of ${r.take}; remainder back-orders or short-closes.</span>`
+        : `<span class="short">Skipping this plate (0 picked).</span>`;
+    }
+    function onScanRow(code, r){
+      const w=S.work[S.pick.li], row=w.rows[S.pick.ri];
+      if (r && r.type==='location'){ if(r.id===row.from){ S.pick.scanLoc=true; render(); ok('Location confirmed.'); } else flash(`Wrong bin — go to ${locName(row.from)}.`); }
+      else if (r && r.type==='lpn'){ if(r.id===row.lpn){ S.pick.scanUnit=true; render(); ok('LPN confirmed.'); } else flash(`Wrong LPN — expected ${row.lpn}.`); }
+      else if (r && r.type==='product'){ if(r.id===w.product){ S.pick.scanUnit=true; render(); ok('Product confirmed.'); } else flash('That product is not on this pick.'); }
+      else flash('Scan the bin (LOC-…) or the LPN / product.');
+    }
+    function commitPick(){
+      const w=S.work[S.pick.li], r=w.rows[S.pick.ri];
+      if (!(S.pick.scanLoc && S.pick.scanUnit) && !S.pick.override) return flash('Scan the bin and the LPN to confirm (or use the manual override).');
+      const qty=Math.max(0,Math.min(Math.floor(Number(S.pick.qty)||0), r.take));
+      if (w.serial && qty>0 && !String(S.pick.serials||'').trim()) return flash('Record the serial(s) for this serial-tracked pick.');
+      r.picked=qty; r.serials=w.serial?String(S.pick.serials||'').trim():''; r.done=true; r.override=!!S.pick.override && !(S.pick.scanLoc&&S.pick.scanUnit);
+      S.pick=null; S.view='order'; render();
+      ok(qty>=r.take ? `Picked ${qty} ${w.uom} of ${prodName(w.product)} from ${locName(r.from)}.`
+        : qty>0 ? `Short pick recorded — ${qty} of ${r.take} ${w.uom} of ${prodName(w.product)}.`
+        : `${prodName(w.product)} from ${locName(r.from)} skipped (0 picked).`);
+    }
+
+    // F8 — damage found at pick: peel the damaged qty to a blocked disposition (pickReject) and short this
+    // row (reduce r.take) so the line shorts → existing back-order / short-close runs at dispatch.
+    function reportDamage(){
+      const w=S.work[S.pick.li], r=w.rows[S.pick.ri], max=r.take;
+      const raw = prompt(`Report damage on ${r.lpn} — quantity damaged (max ${max}):`, String(Math.min(max,1)));
+      if (raw===null) return;
+      const qty = Math.max(0, Math.min(Math.floor(Number(raw)||0), max));
+      if (!(qty>0)) return flash('Enter a quantity greater than 0.');
+      const reasons = reasonsFor('status','damaged');
+      const reason = prompt(`Reason for damage:\n- ${reasons.join('\n- ')}`, reasons[0]||'Damage found');
+      if (reason===null) return;
+      const res = pickReject(r.lpn, qty, { disposition:'damaged', reason, user:PWA.user, ref:S.orderId });
+      if (!res) return flash('Could not record the damage (nothing peeled).');
+      r.take = Math.max(0, r.take - qty); r.picked = Math.min(r.picked, r.take);
+      r.done = true; r.serials = w.serial ? String(S.pick.serials||'').trim() : '';
+      S.pick=null; S.view='order'; render();
+      ok(`${qty} ${w.uom} of ${prodName(w.product)} reported damaged → quarantine (${reason}); line shorts by ${qty}.`);
+    }
+    // F8 — stock not found at the bin: raise a pending-approval count (flagCountForMissing) and short this row.
+    function stockNotFound(){
+      const w=S.work[S.pick.li], r=w.rows[S.pick.ri], max=r.take;
+      const raw = prompt(`Stock NOT FOUND for ${r.lpn} at ${locName(r.from)} — quantity missing (max ${max}):`, String(max));
+      if (raw===null) return;
+      const qty = Math.max(0, Math.min(Math.floor(Number(raw)||0), max));
+      if (!(qty>0)) return flash('Enter a quantity greater than 0.');
+      flagCountForMissing({ lpn:r.lpn, loc:r.from, product:w.product, qty, site:site(), by:PWA.user });
+      r.take = Math.max(0, r.take - qty); r.picked = Math.min(r.picked, r.take);
+      r.done = true; r.serials = w.serial ? String(S.pick.serials||'').trim() : '';
+      S.pick=null; S.view='order'; render();
+      ok(`${qty} unit(s) of ${prodName(w.product)} not found at ${locName(r.from)} — count raised; line shorts by ${qty}.`);
+    }
+
+    /* ============================================================ LOAD & DISPATCH (carrier + proof-of-load → issue) */
+    function renderLoad(){
+      const o=orderById(S.orderId); if(!o){ S.view='list'; return render(); }
+      let lines='';
+      S.work.forEach(w=>{ if(w.cancelled) return; const got=linePicked(w); if(!got) return;
+        const short = got < w.target;
+        lines += `<div class="sum-row"><span>${esc(prodName(w.product))}${short?` <span class="short">· short ${got}/${w.target}</span>`:''}</span><span class="q">${got} ${esc(w.uom)}</span></div>`; });
+      const issued=orderIssued();
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(o.id)}</b> → <b>${esc(consigneeName(o.shipTo))}</b>
+          <div class="muted" style="margin-top:4px">Confirm load &amp; dispatch — issues stock and writes the delivery note.</div></div>
+        <div class="panel" style="margin-bottom:10px">${lines || '<span class="muted">Nothing picked.</span>'}
+          <div class="sum-row" style="border-top:2px solid var(--line);margin-top:4px;padding-top:8px"><span><b>Total to issue</b></span><span class="q">${issued} unit(s)</span></div></div>
+        <label class="field"><span>Carrier <span class="req">*</span></span>
+          <select id="ld-carrier"><option value="">— select carrier —</option>${DB.carriers.map(c=>`<option value="${c.id}"${c.id===S.carrier?' selected':''}>${esc(c.name)}</option>`).join('')}</select></label>
+        <div style="margin:6px 0">${photoField({ ref:o.id, level:'header', title:'Proof of load (optional)' })}</div>
+        <div style="margin:6px 0">${noteField({ ref:o.id, level:'header', title:'Dispatch note (optional)' })}</div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="ld-confirm" style="width:100%">Confirm dispatch &amp; issue</button>
+        <button class="btn btn-outline" id="ld-back" style="width:100%">‹ Back to pick list</button>`;
+      const cs=$('ld-carrier'); if(cs) cs.onchange=()=>{ S.carrier=cs.value; };
+      $('ld-confirm').onclick=issueOrder;
+      $('ld-back').onclick=()=>{ S.view='order'; render(); };
+    }
+    function issueOrder(){
+      const o=orderById(S.orderId); if(!o){ S.view='list'; return render(); }
+      if (!anyPicked()) return flash('Pick at least one line before dispatching.');
+      // F15 — serial validation on issue: non-empty, count === picked qty, no duplicates (was presence-only).
+      for (const w of S.work){
+        if (w.cancelled || !w.serial) continue;
+        for (const r of w.rows){
+          if (!(r.done && r.picked>0)) continue;
+          const vs = validateSerials(r.serials, r.picked);
+          if (!vs.ok) return flash(`Serials invalid — ${prodName(w.product)} (${r.lpn}): ${vs.error}.`);
+        }
+      }
+      if (!S.carrier) return flash('Select a carrier for the dispatch.');
+      // C1 — re-validate every plate being issued is still issuable before committing.
+      const guardLines=[]; S.work.forEach(w=>{ if(!w.cancelled) w.rows.forEach(r=>{ if(r.done && r.picked>0) guardLines.push({ lpn:r.lpn, picked:+r.picked||0 }); }); });
+      const guard = dispatchGuard(guardLines);
+      if (!guard.ok) return flash('Cannot dispatch — '+guard.fails.map(f=>`${f.lpn}: ${f.why}`).join('; ')+'.');
+      // F20 — cold-chain / carrier mismatch (confirm-gated): warn if a cold product ships on a non-cold carrier.
+      const coldIssued = S.work.some(w=>!w.cancelled && coldChainProduct(w.product) && w.rows.some(r=>r.done && r.picked>0));
+      if (coldIssued && !carrierIsCold(S.carrier)){
+        if (!confirm('⚠ Cold-chain warning — this shipment contains a cold-chain product but the selected carrier is not cold-chain rated. Proceed anyway?')) return;
+      }
+
+      const shipId = `${o.id.replace('OUT-','DN-')}-${(o.shipments||[]).length+1}`;
+      const shipLines=[]; let issued=0;
+      o.lines.forEach((line,i)=>{
+        const w=S.work[i]; if(!w || w.cancelled) return;
+        const picks = w.rows.filter(r=>r.done && r.picked>0);
+        if (!picks.length) return;
+        let lp=0;
+        const allocCopy = picks.map(r=>{
+          const q=+r.picked||0; issued+=q; lp+=q;
+          const l=lpnById(r.lpn); if(l){ l.qty=Math.max(0,l.qty-q); if(l.qty<=0) l.status='dispatched'; }   // issue the stock
+          // C1 — per-LPN dispatch audit txn (issued out of inventory)
+          logTxn({ type:'dispatch', lpn:r.lpn, product:line.product, qty:q, from:r.from, to:'(shipped)', site:o.site,
+                   user:PWA.user, ref:o.id, note:`PWA pick ${shipId}${r.override?' · ⚠ manual override':''}` });
+          return { lpn:r.lpn, lot:r.lot, expiry:r.expiry, from:r.from, qty:+r.take, picked:q, serials:w.serial?r.serials:undefined };
+        });
+        line.shipped=(line.shipped||0)+lp; line.alloc=[];                  // cumulative shipped; clear reservation
+        shipLines.push({ product:line.product, picked:lp, alloc:allocCopy });
+      });
+      (o.shipments=o.shipments||[]).push({ id:shipId, date:TODAY, carrier:S.carrier, lines:shipLines });
+
+      const complete=outboundComplete(o), backorder=!complete && clientAllowsBackorder(o.client);
+      o.status = backorder ? 'partial' : 'dispatched'; o.dispatched=TODAY;
+      if (!complete && !backorder) o.shortClosed=true;
+      PWA.save();
+      S.last = { shipId, issued, complete, backorder, shortClosed:!complete&&!backorder, remaining:outTotals(o).remaining,
+                 carrier:(DB.carriers.find(c=>c.id===S.carrier)||{}).name||S.carrier, consignee:consigneeName(o.shipTo), lines:shipLines.slice() };
+      S.view='done'; render();
+    }
+
+    /* ============================================================ DONE — delivery note summary */
+    function renderDone(){
+      const L=S.last||{};
+      const outcome = L.complete ? `<span style="color:#235c25">Order complete.</span>`
+        : L.backorder ? `<span class="short">${L.remaining} unit(s) back-ordered — re-allocate when stock arrives.</span>`
+        : `<span class="short">Remainder of ${L.remaining} unit(s) short-closed.</span>`;
+      const lines = (L.lines||[]).map(sl=>`<div class="sum-row"><span>${esc(prodName(sl.product))}</span><span class="q">${sl.picked} ${esc(uomOf(sl.product))}</span></div>`).join('');
+      root.innerHTML = `
+        <div class="success"><div class="check">✓</div>
+          <p><b>${L.issued} unit(s) issued</b> · dispatched to ${esc(L.consignee||'—')}.</p></div>
+        <div class="panel" style="margin:10px 0">
+          <b>Delivery note <span class="mono">${esc(L.shipId||'')}</span></b>
+          <div class="muted" style="margin:4px 0 8px">Carrier: ${esc(L.carrier||'—')} · ${esc(TODAY)}</div>
+          ${lines}
+          <div class="sum-row" style="border-top:2px solid var(--line);margin-top:4px;padding-top:8px"><span>${outcome}</span><span class="q">${L.issued}</span></div></div>
+        <button class="btn btn-primary" id="dn-more" style="width:100%">Pick another order</button>
+        <button class="btn btn-outline" id="dn-dispatched" style="width:100%">View dispatched</button>
+        <button class="btn btn-outline" id="dn-home" style="width:100%">Home</button>`;
+      $('dn-more').onclick=()=>{ S.tab='open'; S.view='list'; S.orderId=null; S.work=null; S.last=null; render(); };
+      $('dn-dispatched').onclick=()=>{ S.tab='done'; S.view='list'; S.orderId=null; S.work=null; S.last=null; render(); };
+      $('dn-home').onclick=()=>{ location.href='pwa-home.html'; };
+    }
+
+    /* ============================================================ dispatch */
+    function render(){
+      flashClear();
+      ({ list:renderList, order:renderOrder, pick:renderPick, load:renderLoad, note:renderNote, done:renderDone }[S.view] || renderList)();
+      if (S.view==='list' && S.banner){ ok(S.banner); S.banner=null; }
+    }
+    // deep link: ?order=OUT-7001 opens straight into its pick list
+    const q=new URLSearchParams(location.search);
+    const deep=q.get('order');
+    if (deep && orderById(deep) && fulfillable(orderById(deep))) openOrder(deep);
+    else render();
+  })();
+  </script>
+</body>
+</html>

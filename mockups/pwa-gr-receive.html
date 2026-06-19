@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Receive — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Receive" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <style>
+      .seg-cond { display:flex; gap:6px; margin:2px 0 6px; }
+      .seg-cond button { flex:1; padding:11px 4px; border:1px solid var(--line); background:var(--white);
+        border-radius:var(--radius); font:inherit; font-size:13px; cursor:pointer; color:var(--ink-soft); }
+      .seg-cond button.on-good    { background:var(--ok);  color:#fff; border-color:var(--ok); }
+      .seg-cond button.on-inspect { background:#b8860b;     color:#fff; border-color:#b8860b; }
+      .seg-cond button.on-damaged { background:var(--bad);  color:#fff; border-color:var(--bad); }
+      .rcv-base { font-weight:700; }
+      #rcv .exp-warn { font-size:11px; font-weight:600; margin-top:3px; }
+      #rcv .dup-warn { background:#fff4e0; border-left:3px solid #b8860b; padding:9px 12px;
+        font-size:12px; color:#7a5a00; border-radius:0 var(--radius) var(--radius) 0; margin-bottom:10px; }
+    </style>
+    <div id="rcv-flash" class="sb-msg" style="display:none"></div>
+    <div id="rcv"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/barcode.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('rcv');
+    const TODAY = new Date('2026-06-15');
+    // Over/short DISCREPANCY reasons stay local; CONDITION reasons (Hold/Damaged) come from master data
+    // via reasonsFor('receipt', 'hold'|'damaged') — mirrors the ERP receive + Inspection screens (F19).
+    const REASONS = ['Short / under-delivered','Over / extra delivered','Damaged in transit','Expired / near expiry',
+                     'Count discrepancy','Contamination / spoilage','Labelling / barcode error','Other'];
+    const condReasonKey = { inspect:'hold', damaged:'damaged' };
+    const condReasons = c => reasonsFor('receipt', condReasonKey[c] || 'hold');
+    const condStatus = { good:'to-putaway', inspect:'to-inspect', damaged:'quarantine' };
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+
+    const S = { view:'source', asnId:null, pid:null, lineIdx:null, startLevel:0, cond:'good', split:'none', done:null, palletLines:[], palletDone:null, deliveryRef:'', refuseDone:null };
+
+    /* ---------- helpers ---------- */
+    function flash(t){ const m=$('rcv-flash'); if(m){ m.textContent=t; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('rcv-flash'); if(m){ m.style.display='none'; } }
+    function levelsFor(pid){
+      const ls = packagingFor(pid);
+      if (ls && ls.length) return ls.map(l => ({ name:l.level, factor:l.factor||1 }));
+      const p = DB.products.find(x=>x.id===pid)||{}; return [{ name:(p.uom||'each'), factor:1 }];
+    }
+    function expWarn(d){ if(!d) return null; const days=Math.round((new Date(d)-TODAY)/864e5);
+      if(days<0) return {c:'#b03030',t:`⚠ expired ${-days}d ago`}; if(days<=30) return {c:'#8a6d00',t:`⚠ expires in ${days}d`}; return null; }
+    const clientProducts = () => DB.products.filter(p=>p.client===client());
+    const openAsns = () => DB.asns.filter(a=>a.site===site() && a.client===client() && asnStatus(a)!=='closed' && a.state!=='refused' && a.state!=='cancelled' && (!PWA.mineOnly() || isMine(a)));
+    const asnRemaining = a => a.lines.reduce((s,l)=>s+Math.max(0,(l.qty||0)-(l.received||0)),0);
+
+    /* ---------- pallet-in-progress bar (post-hoc aggregation) ---------- */
+    function palletBar(){
+      const n=S.palletLines.length; if(!n) return '';
+      const u=S.palletLines.reduce((s,l)=>s+l.qty,0);
+      return `<div class="panel" id="plt-bar" style="margin-bottom:10px;border-color:#2f6fed;background:#eef4ff;cursor:pointer">
+        <b>📦 Pallet in progress</b> <span class="muted">· ${n} product(s) · ${u} units</span>
+        <div class="muted" style="margin-top:2px">Tap to review &amp; print one pallet label ▸</div></div>`;
+    }
+    function wirePalletBar(){ const b=$('plt-bar'); if(b) b.onclick=()=>{ S.view='pallet'; render(); }; }
+
+    /* ---------- SOURCE ---------- */
+    function renderSource(){
+      const asns = openAsns();
+      const cards = asns.length ? asns.map(a => {
+        // Assignee row: who it's assigned to + a self-claim / release control (role-gated in the coding phase).
+        const who   = a.assignee ? `${esc(assigneeName(a.assignee))}${isMine(a)?' · me':''}` : '<span class="muted">Any</span>';
+        const claim = a.assignee
+          ? (isMine(a) ? ` · <a href="#" class="claim-btn" data-rel="${a.id}">Release</a>` : '')
+          : ` · <a href="#" class="claim-btn" data-claim="${a.id}">Claim</a>`;
+        return `<div class="task" data-asn="${a.id}"><span class="meta"><b>${esc(a.id)}</b>
+          <small>${esc(dbName('suppliers',a.supplier))} · ${a.lines.length} line(s) · ${asnRemaining(a)} remaining</small>
+          <small style="margin-top:3px">👤 ${who}${claim}</small></span>
+          ${statusBadge(asnStatus(a))}</div>`;
+      }).join('')
+        : `<p class="scan-hint" style="text-align:left">No open ASNs for ${esc(PWA.clientName())} at ${esc(PWA.siteName())}${PWA.mineOnly()?' assigned to you — switch to <b>All</b> above to see every ASN':''}.</p>`;
+      root.innerHTML = palletBar() +
+        PWAScan.field({ id:'sf-src', prompt:'Scan an ASN or product', autofocus:true,
+          placeholder:'ASN-3001 · 5012345000019', hint:'…or pick an inbound ASN below, or receive blind.',
+          list: asns.map(a=>({value:a.id,label:a.id,sub:dbName('suppliers',a.supplier)})), onScan:onScanSource })
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Inbound ASNs</p>${cards}`
+        + `<div class="spacer"></div><button class="btn btn-outline" id="rcv-blind" style="width:100%">Blind receipt — no ASN</button>`;
+      $('rcv-blind').onclick = () => { S.asnId='blind'; S.view='blindscan'; render(); };
+      wirePalletBar();
+      root.querySelectorAll('[data-asn]').forEach(el => el.onclick = () => selectAsn(el.dataset.asn));
+      // self-claim / release — stop the click bubbling to the card's selectAsn
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{
+        ev.preventDefault(); ev.stopPropagation();
+        const a = DB.asns.find(x=>x.id===(el.dataset.claim||el.dataset.rel)); if(!a) return;
+        a.assignee = el.dataset.claim ? DB.currentUserId : '';
+        PWA.save(); render();
+      });
+      focusInput();
+    }
+    function onScanSource(code, r){
+      if (r && r.type==='asn'){ openAsns().some(a=>a.id===r.id) ? selectAsn(r.id) : flash('That ASN is not open for this client/site.'); }
+      else if (r && r.type==='product'){ S.asnId='blind'; startForm(r.id, null, r.extra&&r.extra.level); }
+      else flash('Scan an ASN (ASN-…) or a product barcode/SKU.');
+    }
+    function selectAsn(id){ S.asnId=id; S.view='lines'; render(); }
+
+    /* ---------- ASN LINES ---------- */
+    function renderLines(){
+      const a = DB.asns.find(x=>x.id===S.asnId); if(!a){ S.view='source'; return render(); }
+      const t = asnTotals(a);
+      const lineCards = a.lines.map((l,idx)=>{
+        const rem = Math.max(0,(l.qty||0)-(l.received||0)), done = rem===0;
+        const onPallet = S.palletLines.some(pl=>pl.asnId===a.id && pl.lineIdx===idx);
+        const dim = done && !onPallet;
+        return `<div class="task ${dim?'is-soon':''}" ${dim?'':`data-line="${idx}"`}>
+          <span class="meta"><b>${esc(prodName(l.product))}</b>
+            <small>${l.received||0} / ${l.qty} received${onPallet?' · 📦 on pallet (not yet labelled)':(done?' · complete':` · ${rem} remaining`)}</small></span>
+          ${onPallet?'<span class="badge b-toputaway">on pallet</span>':(done?'<span class="badge b-available">✓</span>':`<span class="badge b-toputaway">${rem}</span>`)}</div>`;
+      }).join('');
+      root.innerHTML = palletBar() +
+        `<div class="panel" style="margin-bottom:10px">
+           <b>${esc(a.id)}</b> ${statusBadge(asnStatus(a))}<br>
+           <span class="muted">${esc(dbName('suppliers',a.supplier))} · ${esc(dbName('clients',a.client))} · ${t.rec}/${t.exp} received</span>
+           <div style="margin-top:8px">${photoField({ref:a.id, level:'header', title:'Delivery / condition photos (optional)'})}</div>
+           <div style="margin-top:8px">${noteField({ref:a.id, level:'header', title:'Delivery notes (optional)'})}</div>
+         </div>`
+        + PWAScan.field({ id:'sf-line', prompt:'Scan a product to receive', placeholder:'5012345000019',
+            kinds:['product'], list: clientProducts().map(p=>({value:p.barcode||p.sku,label:p.name,sub:p.sku})), onScan:onScanLine })
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">ASN lines — tap one to receive</p>${lineCards}`
+        + `<div class="spacer"></div>`
+        + `<button class="btn btn-outline" id="rcv-refuse" style="width:100%;color:var(--bad);border-color:var(--bad)">⛔ Refuse this delivery — keep goods outside</button>`
+        + `<button class="btn btn-outline" id="rcv-back" style="width:100%">‹ Back to ASNs</button>`;
+      $('rcv-refuse').onclick = () => { S.view='refuse'; render(); };
+      $('rcv-back').onclick = () => { S.asnId=null; S.view='source'; render(); };
+      wirePalletBar();
+      root.querySelectorAll('[data-line]').forEach(el => el.onclick = () => startForm(a.lines[+el.dataset.line].product, +el.dataset.line, null));
+    }
+    function onScanLine(code, r){
+      const a = DB.asns.find(x=>x.id===S.asnId);
+      if (r && r.type==='product'){
+        const idx = a.lines.findIndex(l => l.product===r.id && Math.max(0,(l.qty||0)-(l.received||0))>0);
+        startForm(r.id, idx>=0?idx:null, r.extra&&r.extra.level);
+      } else flash('Scan a product barcode or SKU.');
+    }
+
+    /* ---------- BLIND product scan ---------- */
+    function renderBlindScan(){
+      root.innerHTML = palletBar() +
+        PWAScan.field({ id:'sf-blind', prompt:'Scan a product (blind receipt)', autofocus:true,
+          placeholder:'5012345000019 · OLIVE-500', kinds:['product'],
+          list: clientProducts().map(p=>({value:p.barcode||p.sku,label:p.name,sub:p.sku})),
+          onScan:(c,r)=>{ (r&&r.type==='product') ? startForm(r.id,null,r.extra&&r.extra.level) : flash('Scan a product barcode or SKU.'); } })
+        + `<div class="spacer"></div><button class="btn btn-outline" id="rcv-back" style="width:100%">‹ Back</button>`;
+      $('rcv-back').onclick = () => { S.asnId=null; S.view='source'; render(); };
+      wirePalletBar();
+      focusInput();
+    }
+
+    /* ---------- RECEIVE FORM ---------- */
+    function startForm(pid, lineIdx, level){
+      S.pid=pid; S.lineIdx=(lineIdx==null?null:lineIdx); S.cond='good'; S.split='none';
+      const levels = levelsFor(pid);
+      S.startLevel = level ? Math.max(0, levels.findIndex(l=>l.name===level.level)) : 0;
+      S.view='form'; render();
+    }
+    function curBase(){
+      const levels = levelsFor(S.pid), showLvl = levels.length>1;
+      const lvl = (showLvl && $('f-lvl')) ? +$('f-lvl').value : 0;
+      const factor = levels[lvl] ? levels[lvl].factor : 1;
+      const cnt = Math.max(0, parseInt(($('f-qty')||{}).value,10)||0);
+      return cnt*factor;
+    }
+    function serArr(){ const t=$('f-ser'); return t ? t.value.split('\n').map(s=>s.trim()).filter(Boolean) : []; }
+    function serCount(){ const need=curBase(), arr=serArr(), uniq=new Set(arr).size===arr.length, el=$('f-sercount');
+      if(el){ el.textContent=`${arr.length}/${need}`+(uniq?'':' dupes'); el.style.color=(arr.length===need&&need>0&&uniq)?'var(--ok)':'var(--bad)'; } }
+
+    // A line already committed onto the pallet reopens read-only — no Confirm/Add (prevents double-add); only "cancel & remove".
+    function renderOnPallet(idx){
+      const pl = S.palletLines[idx];
+      const p = DB.products.find(x=>x.id===pl.product)||{};
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px;border-color:#2f6fed;background:#eef4ff">
+          <b>${esc(pl.name||prodName(pl.product))}</b> <span class="badge b-toputaway">on pallet</span><br>
+          <span class="muted mono">${esc(p.sku||'')}${(S.asnId&&S.asnId!=='blind')?' · '+esc(S.asnId):''}</span>
+          <div class="muted" style="margin-top:8px">✓ Confirmed onto the pallet in progress:</div>
+          <div style="margin-top:2px"><b>${pl.qty} ${esc(pl.uom)}</b>${pl.lot?' · lot '+esc(pl.lot):''}${pl.expiry?' · exp '+esc(pl.expiry):''}${(pl.serials&&pl.serials.length)?' · '+pl.serials.length+' serials':''}</div>
+        </div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Already added — it gets one shared pallet label when you close the pallet. To change qty / lot / serials, cancel below and re-receive it.</p>
+        <button class="btn btn-outline" id="f-uncommit" style="width:100%">↶ Cancel confirmation &amp; remove from pallet</button>
+        <button class="btn btn-outline" id="f-back" style="width:100%">‹ Back to lines</button>`;
+      $('f-uncommit').onclick = () => { S.palletLines.splice(idx,1); render(); };   // re-renders editable (old options return)
+      $('f-back').onclick = () => { S.view = (S.asnId&&S.asnId!=='blind') ? 'lines' : 'source'; render(); };
+    }
+    function renderForm(){
+      // Already committed onto the pallet? Show the read-only state — no double-add.
+      const onPalletIdx = (S.asnId!=='blind' && S.lineIdx!=null)
+        ? S.palletLines.findIndex(l=>l.asnId===S.asnId && l.lineIdx===S.lineIdx) : -1;
+      if (onPalletIdx>=0) return renderOnPallet(onPalletIdx);
+      const p = DB.products.find(x=>x.id===S.pid)||{}, tr = p.track||{}, levels = levelsFor(S.pid), showLvl = levels.length>1;
+      const a = S.asnId!=='blind' ? DB.asns.find(x=>x.id===S.asnId) : null;
+      const line = (a && S.lineIdx!=null) ? a.lines[S.lineIdx] : null;
+      const remaining = line ? Math.max(0,(line.qty||0)-(line.received||0)) : null;
+      const pills = ['lot','expiry','serial'].filter(k=>tr[k]).map(k=>`<span class="badge" style="font-size:10px">${k}</span>`).join(' ');
+      const lvlSel = levels.map((l,i)=>`<option value="${i}" ${i===S.startLevel?'selected':''}>${esc(l.name)}${l.factor>1?` (×${l.factor})`:''}</option>`).join('');
+      const defQty = S.startLevel>0 ? 1 : (remaining||1);
+      const serBlock = tr.serial
+        ? `<label class="field"><span>Serials <span class="req">*</span> — need <b id="f-serneed">?</b></span>
+             <textarea id="f-ser" rows="4" placeholder="one serial per line"></textarea></label>
+           <div class="btn-row" style="margin:-4px 0 10px">
+             <button type="button" class="btn btn-sm btn-outline" id="f-serauto">Auto-generate</button>
+             <span class="mono" id="f-sercount" style="margin-left:auto"></span></div>` : '';
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px">
+          <b>${esc(p.name||S.pid)}</b> ${pills}<br>
+          <span class="muted mono">${esc(p.sku||'')}${a?' · '+esc(a.id):' · blind receipt'}</span>
+          ${remaining!=null?`<div class="muted">Outstanding: <b>${remaining}</b> of ${line.qty} ${esc(p.uom||'')}</div>`:''}
+        </div>
+        <div id="f-dup" class="dup-warn" style="display:none"></div>
+        <label class="field"><span>Supplier delivery-note ref</span><input id="f-delref" value="${esc(S.deliveryRef)}" placeholder="e.g. DN-88231 (carrier paperwork)"></label>
+        <label class="field"><span>Quantity</span>
+          <div style="display:flex;gap:8px">
+            <input id="f-qty" type="number" min="1" value="${defQty}" style="flex:1">
+            ${showLvl?`<select id="f-lvl" style="flex:1.2">${lvlSel}</select>`:''}
+          </div></label>
+        <div style="margin:-6px 0 8px"><span class="rcv-base" id="f-base"></span> <span id="f-osbadge"></span></div>
+        <div id="f-disc-wrap" style="display:none"></div>
+        <div id="f-split-wrap" style="display:none"></div>
+        ${tr.lot?`<label class="field"><span>Lot / batch <span class="req">*</span></span><input id="f-lot" placeholder="e.g. L240115"></label>`:''}
+        ${tr.expiry?`<label class="field"><span>Expiry <span class="req">*</span></span><input id="f-exp" type="date"><div id="f-expwarn" class="exp-warn"></div></label>`:''}
+        ${serBlock}
+        <label class="field" style="margin-bottom:2px"><span>Condition</span></label>
+        <div class="seg-cond" id="f-cond">
+          <button type="button" data-c="good">Good</button>
+          <button type="button" data-c="inspect">Hold</button>
+          <button type="button" data-c="damaged">Damaged</button>
+        </div>
+        <div id="f-reason-wrap" style="display:none"></div>
+        <div style="margin:8px 0">${photoField({ref:`${S.asnId}:${S.pid}`, level:'line', title:'Photos (optional)'})}</div>
+        <div style="margin:8px 0">${noteField({ref:`${S.asnId}:${S.pid}`, level:'line', title:'Note (optional)'})}</div>
+        <button class="btn btn-primary" id="f-confirm" style="width:100%">Confirm receipt — own LPN</button>
+        <button class="btn btn-outline" id="f-addpallet" style="width:100%">📦 Confirm receipt &amp; add to pallet</button>
+        <button class="btn btn-outline" id="f-cancel" style="width:100%">Cancel</button>
+        <button class="btn btn-outline" id="f-refuse" style="width:100%;color:var(--bad);border-color:var(--bad)">⛔ Refuse whole delivery instead</button>`;
+
+      function recalc(){
+        const base = curBase();
+        $('f-base').textContent = `= ${base.toLocaleString()} ${esc(p.uom||'unit')}`;
+        const osb=$('f-osbadge'), dw=$('f-disc-wrap');
+        if (remaining!=null){
+          const diff = base-remaining;
+          if (diff===0){ osb.innerHTML=`<span class="badge b-available">completes line</span>`; dw.style.display='none'; }
+          else { osb.innerHTML=`<span class="badge ${diff>0?'b-quarantine':'b-hold'}">${diff>0?'over +'+diff:'short '+diff}</span>`;
+                 if(!dw.querySelector('#f-disc')) dw.innerHTML=`<label class="field"><span>Discrepancy reason <span class="req">*</span></span>
+                   <select id="f-disc">${['<option value="">— select —</option>'].concat(REASONS.map(x=>`<option>${esc(x)}</option>`)).join('')}</select></label>`;
+                 dw.style.display='block'; }
+        }
+        const need=$('f-serneed'); if(need) need.textContent=base;
+        if (tr.serial) serCount();
+        // Split into LPNs — offer each packaging level above base that yields ≥2 plates
+        const sw=$('f-split-wrap');
+        if (sw){
+          const opts=[];
+          levels.forEach((lv,i)=>{ if(!(lv.factor>0)) return; const k=Math.ceil(base/lv.factor); if(k>=2) opts.push({i,name:lv.name,k}); });
+          if (opts.length){
+            if (!opts.some(o=>String(o.i)===String(S.split))) S.split='none';
+            sw.style.display='block';
+            sw.innerHTML = `<label class="field"><span>Split into LPNs</span><select id="f-split">`
+              + `<option value="none"${S.split==='none'?' selected':''}>1 LPN (whole receipt)</option>`
+              + opts.map(o=>`<option value="${o.i}"${String(o.i)===String(S.split)?' selected':''}>per ${esc(o.name)} → ${o.k} LPNs</option>`).join('')
+              + `</select></label>`;
+            $('f-split').onchange = e => { S.split = e.target.value; };
+          } else { S.split='none'; sw.style.display='none'; sw.innerHTML=''; }
+        }
+      }
+      // F16 — duplicate delivery-note + closed-ASN guard (live banner; hard confirm on submit).
+      function dupCheck(){
+        const el=$('f-dup'); if(!el) return;
+        const msgs=[];
+        if (S.deliveryRef && receiptRefSeen(S.deliveryRef, client())) msgs.push(`Delivery note <b>${esc(S.deliveryRef)}</b> was <b>already received</b> for this client.`);
+        if (a && asnStatus(a)==='closed') msgs.push(`<b>${esc(a.id)}</b> is already <b>closed</b> (fully received).`);
+        el.innerHTML = msgs.length ? ('⚠ '+msgs.join(' ')) : '';
+        el.style.display = msgs.length ? 'block' : 'none';
+      }
+      $('f-delref').addEventListener('input', e => { S.deliveryRef = e.target.value.trim(); dupCheck(); });
+      dupCheck();
+      $('f-qty').addEventListener('input', recalc);
+      if (showLvl) $('f-lvl').addEventListener('change', recalc);
+      if (tr.expiry) $('f-exp').addEventListener('change', () => { const w=expWarn($('f-exp').value), el=$('f-expwarn'); el.textContent=w?w.t:''; el.style.color=w?w.c:''; });
+      root.querySelectorAll('#f-cond button').forEach(b => b.onclick = () => { S.cond=b.dataset.c; paintCond(); });
+      if (tr.serial){ $('f-serauto').onclick = () => {
+          const base=curBase(), r4=(p.sku||'SN').replace(/[^A-Z0-9]/gi,'').slice(0,4).toUpperCase()||'SN', arr=[];
+          for(let i=1;i<=base;i++) arr.push(`${r4}-${String(i).padStart(4,'0')}`); $('f-ser').value=arr.join('\n'); serCount(); };
+        $('f-ser').addEventListener('input', serCount); }
+      $('f-cancel').onclick = () => { const blind=(S.asnId==='blind'); if(blind && !S.palletLines.length) S.asnId=null; S.view = blind ? (S.palletLines.length?'pallet':'source') : 'lines'; render(); };
+      $('f-confirm').onclick = doConfirm;
+      $('f-addpallet').onclick = addToPallet;
+      $('f-refuse').onclick = () => { S.view='refuse'; render(); };
+      paintCond(); recalc();
+    }
+    function paintCond(){
+      const rw=$('f-reason-wrap'); if(!rw) return;
+      root.querySelectorAll('#f-cond button').forEach(b => { b.className = b.dataset.c===S.cond ? 'on-'+S.cond : ''; });
+      if (S.cond==='good'){ rw.style.display='none'; rw.innerHTML=''; }
+      else { rw.style.display='block'; rw.innerHTML=`<label class="field"><span>${S.cond==='damaged'?'Damage':'Hold'} reason <span class="req">*</span></span>
+        <select id="f-creason">${['<option value="">— select —</option>'].concat(condReasons(S.cond).map(x=>`<option>${esc(x)}</option>`)).join('')}</select></label>`; }
+    }
+
+    function readLine(){
+      const p = DB.products.find(x=>x.id===S.pid)||{}, tr = p.track||{};
+      const base = curBase();
+      if (!(base>0)){ flash('Quantity must be greater than 0.'); return null; }
+      // F14 — the scanned product must belong to the receiving client (mis-attributing client-owned stock is serious).
+      const a0 = S.asnId!=='blind' ? DB.asns.find(x=>x.id===S.asnId) : null;
+      const rcvClient = a0 ? a0.client : client();
+      if (p.client && p.client !== rcvClient){
+        flash(`${p.name||S.pid} belongs to ${dbName('clients',p.client)}, not ${dbName('clients',rcvClient)} — wrong client. Cannot receive.`); return null; }
+      const lot = tr.lot ? ($('f-lot').value||'').trim() : '';
+      const exp = tr.expiry ? ($('f-exp').value||'').trim() : '';
+      if (tr.lot && !lot){ flash('Lot / batch is required.'); return null; }
+      if (tr.expiry && !exp){ flash('Expiry is required.'); return null; }
+      // F9 — an expired lot cannot be received as Good; force Hold/Damaged (or refuse the delivery).
+      if (tr.expiry && S.cond==='good' && isExpired({ expiry:exp })){
+        flash(`Lot ${lot||'(exp '+exp+')'} of ${p.name||S.pid} is EXPIRED — it can't be received as Good. Set Hold or Damaged.`); return null; }
+      let serials = [];
+      if (tr.serial){ serials = serArr();
+        if (serials.length!==base){ flash(`Capture ${base} serials (have ${serials.length}).`); return null; }
+        if (new Set(serials).size!==serials.length){ flash('Duplicate serials captured.'); return null; } }
+      return { p, tr, base, lot, exp, serials };
+    }
+    function doConfirm(){
+      const r = readLine(); if(!r) return;
+      const p=r.p, tr=r.tr, base=r.base, lot=r.lot, exp=r.exp, serials=r.serials;
+      if (S.cond!=='good'){ const cr=$('f-creason'); if(!cr||!cr.value) return flash('Select a condition reason.'); }
+      const a = S.asnId!=='blind' ? DB.asns.find(x=>x.id===S.asnId) : null;
+      const line = (a && S.lineIdx!=null) ? a.lines[S.lineIdx] : null;
+      const remaining = line ? Math.max(0,(line.qty||0)-(line.received||0)) : null;
+      let discReason='';
+      if (remaining!=null && base!==remaining){ const d=$('f-disc'); if(!d||!d.value) return flash('Select a discrepancy reason (over/short vs ASN).'); discReason=d.value; }
+      // F16 — duplicate delivery-note + already-closed ASN: require explicit confirm.
+      if (S.deliveryRef && receiptRefSeen(S.deliveryRef, client()) &&
+          !window.confirm(`Delivery note "${S.deliveryRef}" was already received for this client. Receive it again anyway?`)) return;
+      if (a && asnStatus(a)==='closed' &&
+          !window.confirm(`${a.id} is already CLOSED (fully received). Receive more against it anyway?`)) return;
+
+      const rcvSite = a?a.site:site(), rcvClient = a?a.client:client();
+      const status = condStatus[S.cond];
+      const loc = (S.cond==='damaged') ? quarantineLocFor(rcvSite) : stagingLocFor(rcvSite);
+      if (!loc) return flash(S.cond==='damaged' ? 'No quarantine location at this site.' : 'No staging (wait/put) location at this site.');
+
+      // Split into N plates by the chosen packaging level (last plate carries the remainder)
+      const splitLevels = levelsFor(S.pid);
+      const splitIdx = (S.split==='none') ? null : +S.split;
+      const factor = (splitIdx!=null && splitLevels[splitIdx] && splitLevels[splitIdx].factor>0) ? splitLevels[splitIdx].factor : 0;
+      const n = factor ? Math.max(1, Math.ceil(base/factor)) : 1;
+      if (n>50 && !window.confirm(`This will create ${n} separate LPN labels (one per ${splitLevels[splitIdx].name}). Continue?`)) return;
+      const note = `PWA receive · ${S.cond}${discReason?' · '+discReason:''}`;
+      const created = [];
+      let rem = base, si = 0;
+      for (let i=0;i<n;i++){
+        const q = (factor && i<n-1) ? factor : rem;
+        rem -= q;
+        const id = nextLpnId();
+        const slice = tr.serial ? serials.slice(si, si+q) : [];
+        si += q;
+        DB.lpns.push({ id, client:rcvClient, site:rcvSite, product:S.pid, qty:q, lot, expiry:exp, serials:slice, status, loc });
+        logTxn({ type:'receive', lpn:id, product:S.pid, qty:q, from:'', to:loc, site:rcvSite, user:PWA.user, ref:(a?a.id:'(blind)'), note });
+        created.push({ id, qty:q });
+      }
+      if (line) line.received = (line.received||0) + base;
+      // F24 — mint a GRN for this receipt (lines = the plates just created).
+      const grn = grnCreate({ client:rcvClient, site:rcvSite, asn:a?a.id:'', supplier:(a?a.supplier:'')||'',
+        deliveryRef:S.deliveryRef||'',
+        lines: created.map(c => ({ product:S.pid, qty:c.qty, lot, expiry:exp, condition:S.cond, lpn:c.id })),
+        by:PWA.user });
+      PWA.save();
+      S.done = { plates:created, base, status, loc, asnId:a?a.id:null, uom:p.uom||'unit', grnId:grn.id };
+      S.view='done'; render();
+    }
+
+    /* ---------- DONE ---------- */
+    function buildLabel(id){
+      const l = DB.lpns.find(x=>x.id===id); if(!l) return '';
+      const pr = DB.products.find(x=>x.id===l.product)||{}, t = pr.track||{};
+      const lines = [ prodName(l.product), {k:'Client', v:dbName('clients',l.client)}, {k:'Quantity', v:`${l.qty} ${pr.uom||''}`} ];
+      if (t.lot)    lines.push({k:'Lot / batch', v:l.lot||'—'});
+      if (t.expiry) lines.push({k:'Expiry', v:l.expiry||'—'});
+      lines.push({k:'Location', v:locName(l.loc)});
+      lines.push({k:'Status', v:l.status});
+      if (t.serial) lines.push({k:'Serials', v:(l.serials||[]).join(', ')||'—'});
+      return labelHTML({ title:`LPN · ${l.id}`, code:l.id, lines });
+    }
+    function renderDone(){
+      const d=S.done, plates=d.plates||[], n=plates.length;
+      const route = d.status==='to-putaway' ? 'wait/put — ready for putaway'
+                  : d.status==='to-inspect' ? 'inspection' : 'quarantine';
+      const headline = n===1
+        ? `<b>${esc(plates[0].id)}</b> created — ${d.base} ${esc(d.uom)} → <b>${route}</b>.`
+        : `<b>${n} LPNs</b> created — ${d.base} ${esc(d.uom)} split → <b>${route}</b>.`;
+      const plateList = n>1
+        ? `<div class="panel" style="margin-bottom:10px"><div class="muted" style="margin-bottom:4px">Plates created</div>`
+          + plates.map(pl=>`<div style="display:flex;justify-content:space-between;padding:3px 0">
+               <a class="mono" href="pwa-gr-lpn.html?lpn=${encodeURIComponent(pl.id)}">${esc(pl.id)}</a>
+               <span>${pl.qty} ${esc(d.uom)}</span></div>`).join('')
+          + `</div>`
+        : '';
+      const printBtn = n===1
+        ? `<a class="btn btn-primary" href="pwa-gr-lpn.html?lpn=${encodeURIComponent(plates[0].id)}" style="display:block;text-align:center">Print LPN label</a>`
+        : `<button class="btn btn-primary" id="rcv-printall" style="width:100%">Print all ${n} labels</button>`;
+      root.innerHTML = `
+        <div class="success"><div class="check">✓</div>
+          <p style="margin:6px 0 0">${headline}</p></div>
+        <div class="panel" style="margin-bottom:10px">
+          <div class="muted">${esc(prodName(S.pid))}</div>
+          <div style="margin-top:4px">${statusBadge(d.status)} @ <span class="mono">${esc(locName(d.loc))}</span></div>
+          ${d.grnId?`<div class="muted" style="margin-top:6px">GRN <b class="mono">${esc(d.grnId)}</b> issued for the client.</div>`:''}
+        </div>
+        ${plateList}
+        ${printBtn}
+        ${d.status==='to-inspect'?`<a class="btn btn-outline" href="pwa-gr-inspect.html" style="display:block;text-align:center">Go to inspection</a>`:''}
+        <button class="btn btn-outline" id="rcv-more" style="width:100%">Receive another</button>
+        <a class="btn" href="pwa-home.html" style="display:block;text-align:center">Done</a>`;
+      const pa=$('rcv-printall'); if(pa) pa.onclick = () => printLabels(plates.map(pl=>buildLabel(pl.id)).filter(Boolean), 'LPN labels');
+      $('rcv-more').onclick = () => { const back=d.asnId; S.pid=null; S.done=null; if(back){ S.asnId=back; S.view='lines'; } else { S.asnId=null; S.view='source'; } render(); };
+    }
+
+    /* ---------- MIXED PALLET — post-hoc aggregation (receive lines → close → one label) ---------- */
+    // "Add to pallet" on the receive form defers the line onto S.palletLines instead of minting an LPN now.
+    function addToPallet(){
+      const r = readLine(); if(!r) return;                       // qty/lot/expiry/serials validated
+      if (S.cond!=='good') return flash('Hold / Damaged items must be received as their own LPN — not on a putaway pallet.');
+      const a = S.asnId!=='blind' ? DB.asns.find(x=>x.id===S.asnId) : null;
+      const line = (a && S.lineIdx!=null) ? a.lines[S.lineIdx] : null;
+      const remaining = line ? Math.max(0,(line.qty||0)-(line.received||0)) : null;
+      if (remaining!=null && r.base!==remaining){ const d=$('f-disc'); if(!d||!d.value) return flash('Select a discrepancy reason (over/short vs ASN).'); }
+      S.palletLines.push({ product:S.pid, qty:r.base, lot:r.lot, expiry:r.exp, serials:r.serials,
+        name:(r.p.name||S.pid), uom:(r.p.uom||'unit'), asnId:(a?a.id:null), lineIdx:(a?S.lineIdx:null) });
+      const n=S.palletLines.length;
+      flash(`Added ${prodName(S.pid)} to the pallet — ${n} product${n>1?'s':''} so far. Keep receiving, then close the pallet.`);
+      S.pid=null;
+      S.view = a ? 'lines' : 'blindscan';                        // keep receiving the rest
+      render();
+    }
+    function renderPallet(){
+      const lines = S.palletLines, units = lines.reduce((s,l)=>s+l.qty,0);
+      const asns = [...new Set(lines.map(l=>l.asnId).filter(Boolean))];
+      const asnRef = asns.length===1 ? asns[0] : (asns.length>1 ? 'multiple ASNs' : '');
+      const list = lines.length
+        ? lines.map((l,i)=>`<div class="task"><span class="meta"><b>${esc(l.name)}</b>
+            <small>${l.qty} ${esc(l.uom)}${l.lot?' · lot '+esc(l.lot):''}${l.expiry?' · exp '+esc(l.expiry):''}${(l.serials&&l.serials.length)?' · '+l.serials.length+' serials':''}${l.asnId?' · '+esc(l.asnId):''}</small></span>
+            <button data-rm="${i}" aria-label="Remove from pallet" style="flex:0 0 auto;border:1px solid var(--line);background:var(--white);color:var(--bad);border-radius:8px;font-size:16px;line-height:1;padding:8px 11px;cursor:pointer">✕</button></div>`).join('')
+        : `<p class="scan-hint" style="text-align:left">No products yet — use “📦 Add to pallet” on each item you receive.</p>`;
+      root.innerHTML =
+        `<div class="panel" style="margin-bottom:10px"><b>📦 Pallet — one label for all of it</b>
+           <span class="muted">· ${esc(PWA.clientName())} / ${esc(PWA.siteName())}${asnRef?' · '+esc(asnRef):''}</span>
+           <div class="muted" style="margin-top:4px">${lines.length} product(s) · ${units} units → decomposes at putaway into one LPN per product</div></div>
+         <p class="scan-hint" style="text-align:left;margin-left:2px">Products on this pallet</p>${list}
+         <div class="spacer"></div>
+         <button class="btn btn-outline" id="plt-add" style="width:100%">+ Add another product</button>
+         <button class="btn btn-primary" id="plt-close" style="width:100%"${lines.length?'':' disabled'}>Close pallet & print label</button>
+         <button class="btn btn-outline" id="plt-cancel" style="width:100%">Discard pallet</button>`;
+      $('plt-add').onclick = () => { const a=(S.asnId&&S.asnId!=='blind'&&DB.asns.find(x=>x.id===S.asnId)); if(a){ S.view='lines'; } else { S.asnId='blind'; S.view='blindscan'; } render(); };
+      $('plt-close').onclick = closePallet;
+      $('plt-cancel').onclick = () => { if(!window.confirm(`Discard this pallet and its ${lines.length} line(s)?`)) return; S.palletLines=[]; S.asnId=null; S.view='source'; render(); };
+      root.querySelectorAll('[data-rm]').forEach(el=>el.onclick=()=>{ S.palletLines.splice(+el.dataset.rm,1); render(); });
+    }
+    function closePallet(){
+      if(!S.palletLines.length) return flash('Add at least one product to the pallet.');
+      const rcvSite=site(), rcvClient=client(), loc=stagingLocFor(rcvSite);
+      if(!loc) return flash('No staging (wait/put) location at this site.');
+      const asns = [...new Set(S.palletLines.map(l=>l.asnId).filter(Boolean))];
+      const asnRef = asns.length===1 ? asns[0] : '';
+      const id = nextPalletId();
+      DB.pallets.push({ id, client:rcvClient, site:rcvSite, status:'to-putaway', loc, asn:asnRef,
+        lines: S.palletLines.map(l=>({ product:l.product, qty:l.qty, lot:l.lot, expiry:l.expiry, serials:(l.serials||[]).slice() })) });
+      // post received qty back to the ASN line(s) the goods came from (deferred until close)
+      S.palletLines.forEach(l=>{ if(l.asnId!=null && l.lineIdx!=null){ const a=DB.asns.find(x=>x.id===l.asnId); if(a&&a.lines[l.lineIdx]) a.lines[l.lineIdx].received=(a.lines[l.lineIdx].received||0)+l.qty; } });
+      const units = S.palletLines.reduce((s,l)=>s+l.qty,0);
+      logTxn({ type:'receive', lpn:id, product:'(mixed pallet)', qty:units, from:'', to:loc, site:rcvSite, user:PWA.user, ref:(asnRef||id), note:`PWA receive · mixed pallet · ${S.palletLines.length} line(s)${asnRef?' · '+asnRef:''}` });
+      PWA.save();
+      S.palletDone = { id, lines:S.palletLines.length, units, loc, asn:asnRef };
+      S.palletLines=[]; S.asnId=null; S.view='palletdone'; render();
+    }
+    function renderPalletDone(){
+      const d=S.palletDone;
+      root.innerHTML = `
+        <div class="success"><div class="check">✓</div>
+          <p style="margin:6px 0 0"><b>${esc(d.id)}</b> — mixed pallet of <b>${d.lines}</b> products (${d.units} units)${d.asn?' · '+esc(d.asn):''} → <b>wait/put — ready for putaway</b>.</p></div>
+        <div class="panel" style="margin-bottom:10px"><div class="muted">One license plate · scan it at Putaway to place each product into its bin</div>
+          <div style="margin-top:4px">${statusBadge('to-putaway')} @ <span class="mono">${esc(locName(d.loc))}</span></div></div>
+        <a class="btn btn-primary" href="pwa-gr-lpn.html?pallet=${encodeURIComponent(d.id)}" style="display:block;text-align:center">Print pallet label</a>
+        <button class="btn btn-outline" id="rcv-more" style="width:100%">Receive more</button>
+        <a class="btn" href="pwa-home.html" style="display:block;text-align:center">Done</a>`;
+      $('rcv-more').onclick = () => { S.palletDone=null; S.asnId=null; S.view='source'; render(); };
+    }
+
+    /* ---------- REFUSE DELIVERY (F4) — record a reasoned refusal, mint NO stock, keep goods outside ---------- */
+    function renderRefuse(){
+      const a = (S.asnId && S.asnId!=='blind') ? DB.asns.find(x=>x.id===S.asnId) : null;
+      const reasons = reasonsFor('refuse');
+      const supOpts = ['<option value="">— select —</option>'].concat((DB.suppliers||[]).map(s=>`<option value="${s.id}" ${a&&a.supplier===s.id?'selected':''}>${esc(s.name)}</option>`)).join('');
+      const carOpts = ['<option value="">— none —</option>'].concat((DB.carriers||[]).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`)).join('');
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px;border-color:var(--bad);background:#fdeef0">
+          <b style="color:var(--bad)">⛔ Refuse delivery</b><br>
+          <span class="muted">${a?esc(a.id)+' · '+esc(dbName('suppliers',a.supplier)):'Blind delivery (no ASN)'} · ${esc(PWA.clientName())} / ${esc(PWA.siteName())}</span>
+          <div class="muted" style="margin-top:6px">No stock is created. The goods are <b>kept outside the warehouse</b> (truck turned away); the refusal is logged for the client &amp; supplier.</div>
+        </div>
+        <label class="field"><span>Refusal reason <span class="req">*</span></span>
+          <select id="rf-reason">${['<option value="">— select —</option>'].concat(reasons.map(x=>`<option>${esc(x)}</option>`)).join('')}</select></label>
+        <label class="field"><span>Supplier</span><select id="rf-sup">${supOpts}</select></label>
+        <label class="field"><span>Carrier (who delivered)</span><select id="rf-car">${carOpts}</select></label>
+        <label class="field"><span>Note (optional)</span><textarea id="rf-note" rows="3" placeholder="e.g. 3 pallets, seals broken, temp logger reads 14°C, driver waiting"></textarea></label>
+        <button class="btn btn-primary" id="rf-confirm" style="width:100%;background:var(--bad);border-color:var(--bad)">Confirm refusal — keep goods outside</button>
+        <button class="btn btn-outline" id="rf-cancel" style="width:100%">Cancel</button>`;
+      $('rf-confirm').onclick = () => {
+        const reason = $('rf-reason').value; if(!reason) return flash('Select a refusal reason.');
+        const supplier = $('rf-sup').value, carrier = $('rf-car').value, note = ($('rf-note').value||'').trim();
+        const rec = refuseDelivery({ asn:(a?a.id:''), client:client(), site:site(), supplier, carrier, reason, note, by:PWA.user });
+        PWA.save();
+        S.refuseDone = { id:rec.id, asn:(a?a.id:''), reason }; S.view='refusedone'; render();
+      };
+      $('rf-cancel').onclick = () => { S.view = (S.asnId && S.asnId!=='blind') ? 'lines' : 'source'; render(); };
+    }
+    function renderRefuseDone(){
+      const d = S.refuseDone;
+      root.innerHTML = `
+        <div class="success" style="background:#fdeef0"><div class="check" style="background:var(--bad)">⛔</div>
+          <p style="margin:6px 0 0"><b>Delivery refused.</b> No stock was created — the goods stay <b>outside the warehouse</b>.</p></div>
+        <div class="panel" style="margin-bottom:10px">
+          <div>Refusal <b class="mono">${esc(d.id)}</b> recorded for the client &amp; supplier.</div>
+          ${d.asn?`<div class="muted" style="margin-top:4px">${esc(d.asn)} marked <b>refused</b> — it drops off the open-ASN list.</div>`:''}
+          <div class="muted" style="margin-top:4px">Reason: ${esc(d.reason)}</div>
+        </div>
+        <button class="btn btn-outline" id="rf-more" style="width:100%">Back to receiving</button>
+        <a class="btn" href="pwa-home.html" style="display:block;text-align:center">Done</a>`;
+      $('rf-more').onclick = () => { S.asnId=null; S.refuseDone=null; S.view='source'; render(); };
+    }
+
+    /* ---------- dispatch ---------- */
+    function focusInput(){ const i=root.querySelector('.sb-input'); if(i) i.focus(); }
+    function render(){
+      flashClear();
+      ({ source:renderSource, lines:renderLines, blindscan:renderBlindScan, form:renderForm, done:renderDone, pallet:renderPallet, palletdone:renderPalletDone, refuse:renderRefuse, refusedone:renderRefuseDone }[S.view] || renderSource)();
+    }
+
+    /* ---------- init (optional ?asn= deep link) ---------- */
+    const urlAsn = new URLSearchParams(location.search).get('asn');
+    if (urlAsn && openAsns().some(a=>a.id===urlAsn)){ S.asnId=urlAsn; S.view='lines'; }
+    render();
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LPN label — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="LPN label" data-pwa-back="pwa-home.html">
+  <div id="page-content">
+    <style>
+      #lpn .bc-wrap { background:#fff; border:1px solid var(--line-soft); border-radius:var(--radius);
+        padding:14px; text-align:center; margin-bottom:10px; }
+      #lpn .bc-wrap svg { max-width:100%; height:auto; }
+      #lpn .kv { display:flex; justify-content:space-between; gap:10px; padding:5px 0; border-bottom:1px solid var(--line-soft); }
+      #lpn .kv:last-child { border-bottom:none; }
+      #lpn .kv .k { color:var(--ink-faint); font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
+      #lpn .kv .v { font-weight:600; text-align:right; }
+    </style>
+    <div id="lpn"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/barcode.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('lpn');
+    const params = new URLSearchParams(location.search);
+
+    // ----- Mixed pallet (aggregate handling unit) label -----
+    const pltId = params.get('pallet');
+    if (pltId){
+      const plt = (DB.pallets||[]).find(x=>x.id===pltId);
+      if (!plt){
+        root.innerHTML = `<div class="panel" style="border-color:#e6bcbc;background:#fbeaea">
+          <b>Pallet not found</b><div class="muted mono">${esc(pltId)}</div></div>
+          <div class="spacer"></div><a class="btn btn-outline" href="pwa-home.html" style="display:block;text-align:center">Home</a>`;
+        return;
+      }
+      const tot = palletTotals(plt);
+      const manifest = palletOpenLines(plt).map(ln=>{
+        const pr=DB.products.find(x=>x.id===ln.product)||{}, t=pr.track||{}, bits=[`${ln.qty} ${pr.uom||''}`];
+        if(t.lot) bits.push('lot '+(ln.lot||'—'));
+        if(t.expiry) bits.push('exp '+(ln.expiry||'—'));
+        if(t.serial) bits.push((ln.serials||[]).length+' serials');
+        return `<div class="kv"><span class="k">${esc(prodName(ln.product))}</span><span class="v">${esc(bits.join(' · '))}</span></div>`;
+      }).join('');
+      root.innerHTML = `
+        <div class="bc-wrap">${barcodeSVG(plt.id, { height:60, module:1.9, font:13 })}</div>
+        <div class="panel" style="margin-bottom:6px">
+          <div class="kv"><span class="k">Type</span><span class="v">Mixed pallet</span></div>
+          ${plt.asn?`<div class="kv"><span class="k">ASN</span><span class="v">${esc(plt.asn)}</span></div>`:''}
+          <div class="kv"><span class="k">Client</span><span class="v">${esc(dbName('clients',plt.client))}</span></div>
+          <div class="kv"><span class="k">Location</span><span class="v">${esc(locName(plt.loc))}</span></div>
+          <div class="kv"><span class="k">Status</span><span class="v">${esc(plt.status)}</span></div>
+          <div class="kv"><span class="k">Contents</span><span class="v">${tot.lines} product(s) · ${tot.units} units</span></div>
+        </div>
+        <div class="panel" style="margin-bottom:10px"><div class="muted" style="margin-bottom:4px">Manifest</div>${manifest}</div>
+        <button class="btn btn-primary" id="lpn-print" style="width:100%">Print pallet label</button>
+        <a class="btn btn-outline" href="pwa-pa-putaway.html" style="display:block;text-align:center">Go to putaway</a>
+        <a class="btn" href="pwa-home.html" style="display:block;text-align:center">Home</a>`;
+      $('lpn-print').onclick = () => {
+        const lines = [`Mixed pallet · ${tot.lines} products · ${tot.units} units${plt.asn?' · '+plt.asn:''}`].concat(
+          palletOpenLines(plt).map(ln=>({ k:prodName(ln.product), v:`${ln.qty} ${(DB.products.find(x=>x.id===ln.product)||{}).uom||''}` })));
+        printLabels([ labelHTML({ title:`PALLET · ${plt.id}`, code:plt.id, lines }) ], `Pallet ${plt.id}`);
+      };
+      return;
+    }
+
+    const id = params.get('lpn');
+    const l = id ? DB.lpns.find(x=>x.id===id) : null;
+
+    if (!l){
+      root.innerHTML = `<div class="panel" style="border-color:#e6bcbc;background:#fbeaea">
+        <b>LPN not found</b><div class="muted mono">${esc(id||'(no id)')}</div></div>
+        <div class="spacer"></div><a class="btn btn-outline" href="pwa-home.html" style="display:block;text-align:center">Home</a>`;
+      return;
+    }
+
+    const p = DB.products.find(x=>x.id===l.product)||{};
+    const rows = [
+      ['Product', prodName(l.product)],
+      ['Client', dbName('clients', l.client)],
+      ['Quantity', `${l.qty} ${p.uom||''}`],
+    ];
+    if (p.track && p.track.lot)    rows.push(['Lot / batch', l.lot||'—']);
+    if (p.track && p.track.expiry) rows.push(['Expiry', l.expiry||'—']);
+    rows.push(['Location', locName(l.loc)]);
+    rows.push(['Status', l.status]);
+    if (p.track && p.track.serial) rows.push(['Serials', (l.serials||[]).join(', ')||'—']);
+
+    root.innerHTML = `
+      <div class="bc-wrap">${barcodeSVG(l.id, { height:60, module:1.9, font:13 })}</div>
+      <div class="panel" style="margin-bottom:10px">
+        ${rows.map(([k,v])=>`<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('')}
+      </div>
+      <button class="btn btn-primary" id="lpn-print" style="width:100%">Print label</button>
+      <a class="btn btn-outline" href="pwa-gr-receive.html" style="display:block;text-align:center">Receive another</a>
+      <a class="btn" href="pwa-home.html" style="display:block;text-align:center">Home</a>`;
+
+    $('lpn-print').onclick = () => {
+      const lines = [`${prodName(l.product)}`].concat(
+        rows.filter(([k])=>k!=='Product').map(([k,v]) => ({ k, v })));
+      printLabels([ labelHTML({ title:`LPN · ${l.id}`, code:l.id, lines }) ], `LPN ${l.id}`);
+    };
+  })();
+  </script>
+</body>
+</html>

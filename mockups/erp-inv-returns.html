@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Returns / Put-back — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="inv-returns" data-erp-title="Inventory Ops"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Inventory Ops › Returns / Put-back">
+  <div id="page-content">
+
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); }
+      .tag.tag-info { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tag.tag-ok   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-block{ border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .badge.b-open   { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .badge.b-closed { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .mode-pick { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
+      .mode-card { flex:1; min-width:240px; border:1.5px solid var(--line); border-radius:var(--radius); padding:12px 14px; cursor:pointer; background:var(--white); }
+      .mode-card:hover { background:var(--fill); } .mode-card.on { border-color:var(--brand); background:var(--brand-tint); }
+      .mode-card b { display:block; } .mode-card small { color:var(--ink-soft); }
+      table.ln { width:100%; border-collapse:collapse; margin:6px 0 10px; }
+      table.ln th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); border-bottom:1.5px solid var(--line); padding:5px 8px; }
+      table.ln td { padding:6px 8px; border-bottom:1px solid var(--line-soft); font-size:13px; vertical-align:middle; }
+      table.ln .num { text-align:right; } table.ln input, table.ln select { max-width:150px; } table.ln input[type=number]{ max-width:80px; }
+      .pick-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; } .pick-row .field { margin-bottom:0; }
+      .act-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; } .act-bar .right { margin-left:auto; display:flex; gap:8px; }
+      .req-note { font-size:12px; color:var(--ink-soft); }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+      <div class="page-head"><h1>Returns / Put-back</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn btn-primary" onclick="openNew()">+ New return</button></div>
+      </div>
+      <p class="sub">Stock re-entering inventory: a <b>put-back</b> of over-picked or unused stock, or a <b>customer return</b>
+        after dispatch. Each line is re-inspected and given a <b>disposition</b> — <b>restock</b> (back to available) or block
+        as <b>quarantine</b>/<b>damaged</b>. Processing creates the plate(s) and writes the audit trail.</p>
+
+      <div class="tabs" id="tabs"></div>
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site</span><select id="f-site"></select></label>
+          <label class="field" id="f-since-wrap"><span>Since date <span class="req">*</span></span><input type="date" id="f-since"></label>
+          <label class="field"><span>Kind</span><select id="f-kind"><option value="all">All kinds</option><option value="putback">Put-back</option><option value="customer">Customer return</option></select></label>
+          <label class="field"><span>Assignee</span><select id="f-assignee"></select></label>
+          <label class="field"><span>Product / order / ID</span><input id="f-q" placeholder="Search…"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:28px">⚙</th><th>ID</th><th>Date</th><th>Kind</th><th>Client</th>
+          <th>Source order</th><th class="num">Lines</th><th class="num">Qty</th><th>Status</th><th>Assignee</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== CREATE ===================== -->
+    <div id="view-form" style="display:none">
+      <div class="page-head"><h1 id="form-title">New return</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+
+      <div class="mode-pick">
+        <div class="mode-card" id="m-putback"  onclick="setKind('putback')"><b>Put-back</b><small>Over-picked / unused stock returned to a bin.</small></div>
+        <div class="mode-card" id="m-customer" onclick="setKind('customer')"><b>Customer return</b><small>Goods returned after dispatch — re-inspect before restocking.</small></div>
+      </div>
+
+      <div class="panel">
+        <fieldset><legend>Header</legend>
+          <div class="field-row">
+            <label class="field"><span>Site</span><select id="h-site"></select></label>
+            <label class="field"><span>Client <span class="req">*</span></span><select id="h-client"></select></label>
+            <label class="field"><span>Source order (optional)</span><select id="h-ref"></select></label>
+            <label class="field"><span>Assignee <span class="muted">· dispatch to (optional)</span></span><select id="h-assignee"></select></label>
+          </div>
+        </fieldset>
+        <fieldset><legend>Lines returned</legend>
+          <div class="pick-row">
+            <label class="field" style="flex:2"><span>Product</span><select id="l-prod" onchange="onReturnProd()"></select></label>
+            <label class="field"><span>Qty</span><input id="l-qty" type="number" min="1" value="1"></label>
+            <label class="field" id="l-lot-wrap"><span>Lot</span><input id="l-lot" placeholder="—"></label>
+            <label class="field"><span>Reason</span><select id="l-reason"></select></label>
+            <button class="btn btn-outline btn-sm" onclick="addLine()">Add line</button>
+          </div>
+          <table class="ln" id="f-lines"></table>
+          <div class="req-note" id="f-empty"></div>
+        </fieldset>
+        <div class="act-bar">
+          <span class="req-note">Saving opens the return for inspection &amp; disposition.</span>
+          <span class="right"><button class="btn btn-outline" onclick="show('list')">Cancel</button>
+            <button class="btn btn-primary" id="save-btn" onclick="saveReturn()">Save return</button></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== PROCESS / REVIEW ===================== -->
+    <div id="view-proc" style="display:none">
+      <div class="page-head"><h1 id="p-title">Return</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Back</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to returns list</a></div>
+      <div class="panel">
+        <fieldset><legend>Return</legend><div class="sum-grid" id="p-summary"></div>
+          <div id="p-photos" style="margin-top:12px"></div>
+          <div id="p-notes" style="margin-top:10px"></div></fieldset>
+        <table class="ln" id="p-lines"></table>
+        <div class="act-bar" id="p-actions"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-16';
+    const KIND_LABEL = { putback:'Put-back', customer:'Customer return' };
+    const DISP_LABEL = { restock:'Restock → available', 'restock-direct':'Restock → bin (direct)',
+      'restock-putaway':'Restock → via Putaway', quarantine:'Quarantine', damaged:'Damaged' };
+    const isRestock = d => d==='restock' || d==='restock-direct' || d==='restock-putaway';
+    const dispClass = d => (d==='restock'||d==='restock-direct') ? 'tag-ok' : (d==='restock-putaway') ? 'tag-info' : 'tag-block';
+
+    const SINCE_DEFAULT = '2026-05-17';   // 30 days before mock "today" (2026-06-16) — caps how far back history loads
+    const state = { site:'S-LYON', kind:'all', q:'', tab:'open', since:SINCE_DEFAULT, assignee:'all' };
+    let fkind='putback', flines=[], cur=null;
+    // Closed returns grow without bound → mandatory Since date; the Open tab never needs it (must always see ALL outstanding).
+    const SINCE_TERMINAL = s => s==='closed';
+    function needSince(){ return state.tab!=='open'; }
+
+    const rBadge = s => `<span class="badge b-${s}">${s}</span>`;
+    const storLocs = site => DB.locations.filter(l=>l.site===site && l.type==='storage' && l.status==='active');
+    const stagingLoc = site => (DB.locations.find(l=>l.site===site && l.type==='wait/put' && l.status==='active')||{}).id || '';
+    const quarLoc    = site => (DB.locations.find(l=>l.site===site && l.type==='quarantine' && l.status==='active')||{}).id || '';
+
+    /* ============================================================ LIST */
+    function renderTabs(){
+      const c = k => DB.returns.filter(r=>r.site===state.site && (k==='all'||r.status===k)).length;
+      const tabs=[['open','Open'],['closed','Closed'],['all','All']];
+      $('tabs').innerHTML = tabs.map(([k,l])=>`<a href="#" class="${k===state.tab?'active':''}" onclick="setTab('${k}');return false">${l} <span class="muted">(${c(k)})</span></a>`).join('');
+      $('f-since-wrap').style.display = needSince()?'':'none';
+    }
+    function setTab(k){ state.tab=k; renderTabs(); renderList(); }
+    function renderList(){
+      if (needSince() && !state.since){ $('rows').innerHTML=`<tr><td colspan="11" class="muted" style="padding:18px">Set a <b>Since date</b> above to load ${state.tab==='all'?'':state.tab+' '}history (bounded for performance).</td></tr>`; $('list-summary').textContent=''; return; }
+      const list = DB.returns.filter(r=>{
+        if (r.site!==state.site) return false;
+        if (state.tab!=='all' && r.status!==state.tab) return false;
+        if (needSince() && SINCE_TERMINAL(r.status) && (r.created||'') < state.since) return false;
+        if (state.kind!=='all' && r.kind!==state.kind) return false;
+        if (!assigneeFilterPass(r, state.assignee)) return false;
+        if (state.q){ const hay=`${r.id} ${r.ref||''} ${r.lines.map(l=>prodName(l.product)).join(' ')}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+        return true;
+      }).sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+      $('rows').innerHTML = list.length ? list.map(r=>{
+        const qty=r.lines.reduce((s,l)=>s+(l.qty||0),0);
+        return `<tr><td class="dots">⋮</td>
+          <td class="mono"><a href="#" onclick="open_('${r.id}');return false">${r.id}</a></td>
+          <td>${esc(r.created)}</td><td><span class="tag tag-info">${esc(KIND_LABEL[r.kind]||r.kind)}</span></td>
+          <td>${esc(dbName('clients',r.client))}</td><td class="mono">${esc(r.ref||'—')}</td>
+          <td class="num">${r.lines.length}</td><td class="num">${qty}</td><td>${rBadge(r.status)}</td>
+          <td>${r.assignee ? `<span class="tag tag-info" title="Dispatched to this person">${esc(assigneeName(r.assignee))}${isMine(r)?' · <b>me</b>':''}</span>` : '<span class="muted">Any</span>'}</td>
+          <td><a href="#" onclick="open_('${r.id}');return false">${r.status==='open'?'Process ›':'View'}</a></td></tr>`;
+      }).join('') : `<tr><td colspan="11" class="muted" style="padding:18px">No ${state.tab==='all'?'':state.tab+' '}returns at ${dbName('sites',state.site)}.</td></tr>`;
+      $('list-summary').textContent = `${list.length} shown · ${DB.returns.filter(r=>r.site===state.site&&r.status==='open').length} open at ${dbName('sites',state.site)}`;
+    }
+
+    /* ============================================================ CREATE */
+    function openNew(){ fkind='putback'; flines=[]; show('form'); $('h-site').value=state.site;
+      $('h-assignee').innerHTML=assigneePickerOptions($('h-site').value,''); setKind('putback'); }
+    function setKind(k){
+      fkind=k;
+      $('m-putback').classList.toggle('on',k==='putback'); $('m-customer').classList.toggle('on',k==='customer');
+      $('form-title').textContent='New '+KIND_LABEL[k].toLowerCase();
+      fillClients(); fillRefs(); fillProds(); fillReasons(); renderFLines();
+    }
+    function fillClients(){ $('h-client').innerHTML=DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join(''); }
+    function fillRefs(){
+      const client=$('h-client').value;
+      const orders=DB.outbound.filter(o=>o.client===client && ['dispatched','partial','picked'].includes(o.status));
+      $('h-ref').innerHTML=`<option value="">— none —</option>`+orders.map(o=>`<option value="${o.id}">${o.id}${o.ref?' · '+esc(o.ref):''}</option>`).join('');
+    }
+    function fillProds(){
+      const client=$('h-client').value;
+      $('l-prod').innerHTML=DB.products.filter(p=>p.client===client).map(p=>`<option value="${p.id}">${esc(prodName(p.id))}</option>`).join('');
+      onReturnProd();
+    }
+    // The Lot input shows only when the chosen product tracks lot (flag-driven; save already drops it otherwise).
+    function onReturnProd(){ const w=$('l-lot-wrap'); if(w) w.style.display = tracksLot($('l-prod').value) ? '' : 'none'; }
+    function fillReasons(){
+      $('l-reason').innerHTML=reasonsFor('return').concat('Other (see note)').map(r=>`<option>${esc(r)}</option>`).join('');
+    }
+    function addLine(){
+      const pid=$('l-prod').value; const qty=Math.max(1,+$('l-qty').value||1); if(!pid) return;
+      const p=DB.products.find(x=>x.id===pid)||{}; const t=p.track||{};
+      flines.push({ product:pid, qty, lot:(t.lot?$('l-lot').value.trim():''), expiry:'', serials:[], reason:$('l-reason').value, disposition:'', toLoc:'', lpn:'' });
+      $('l-qty').value=1; $('l-lot').value='';
+      renderFLines();
+    }
+    function rmFLine(i){ flines.splice(i,1); renderFLines(); }
+    function renderFLines(){
+      if(!flines.length){ $('f-lines').innerHTML=''; $('f-empty').textContent='No lines yet — add at least one.'; $('save-btn').disabled=true; return; }
+      $('f-empty').textContent=''; $('save-btn').disabled=false;
+      $('f-lines').innerHTML=`<thead><tr><th>Product</th><th>Lot</th><th class="num">Qty</th><th>Reason</th><th></th></tr></thead><tbody>`+
+        flines.map((l,i)=>`<tr><td>${esc(prodName(l.product))}</td><td class="mono">${tracksLot(l.product)?esc(l.lot||'—'):'<span class="muted">n/a</span>'}</td><td class="num">${l.qty}</td>
+          <td>${esc(l.reason||'—')}</td><td><a href="#" onclick="rmFLine(${i});return false">remove</a></td></tr>`).join('')+`</tbody>`;
+    }
+    function saveReturn(){
+      if(!flines.length){ alert('Add at least one line.'); return; }
+      const r={ id:nextId('RET',DB.returns,9000), kind:fkind, client:$('h-client').value, site:$('h-site').value,
+        ref:$('h-ref').value||'', status:'open', created:TODAY, by:'Samer Merhi',
+        assignee:($('h-assignee')?$('h-assignee').value:''), lines:flines.map(l=>({...l})) };
+      DB.returns.push(r);
+      state.tab='open'; renderTabs(); banner(`<b>${r.id}</b> (${esc(KIND_LABEL[fkind])}) created — ${r.lines.length} line(s) awaiting disposition.`);
+      renderList(); show('list');
+    }
+
+    /* ============================================================ PROCESS */
+    function open_(id){ cur=DB.returns.find(x=>x.id===id); if(!cur) return; renderProc(); show('proc'); }
+    function renderProc(){
+      const r=cur;
+      $('p-title').textContent=`${KIND_LABEL[r.kind]||r.kind} ${r.id}`;
+      const open = r.status==='open';
+      $('p-summary').innerHTML=[['ID',r.id],['Kind',KIND_LABEL[r.kind]||r.kind],['Client',dbName('clients',r.client)],
+        ['Site',dbName('sites',r.site)],['Source order',r.ref||'—'],['Created',r.created],['Lines',r.lines.length],['Status',r.status]]
+        .map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')
+        + `<div><div class="k">Assignee · dispatch to</div><div class="v">${open
+            ? `<select id="p-assignee" onchange="assignReturn('${r.id}',this.value)" style="max-width:200px">${assigneePickerOptions(r.site, r.assignee)}</select>`
+            : (r.assignee ? esc(assigneeName(r.assignee))+(isMine(r)?' · me':'') : 'Any')}</div></div>`;
+
+      // header-level evidence for the whole return (ref = return id); read-only once closed
+      $('p-photos').innerHTML = photoField({ ref:r.id, level:'header', title:'Return evidence (optional)', readonly:!open });
+      $('p-notes').innerHTML = noteField({ ref:r.id, level:'header', title:'Return notes (optional)', readonly:!open });
+      const locOpts = (loc)=>storLocs(r.site).map(l=>`<option value="${l.id}"${l.id===loc?' selected':''}>${esc(l.structured)}</option>`).join('');
+      $('p-lines').innerHTML=`<thead><tr><th>Product</th><th>Lot</th><th>Expiry</th><th class="num">Qty</th><th>Reason</th><th>Condition</th><th>Notes</th><th>Disposition</th><th>Destination</th><th>Result</th></tr></thead><tbody>`+
+        r.lines.map((l,i)=>{
+          const dispSel = open
+            ? `<select id="d-${i}" onchange="onDisp(${i})"><option value="">— choose —</option>
+                <option value="restock-direct"${l.disposition==='restock-direct'?' selected':''}>Restock → bin (direct)</option>
+                <option value="restock-putaway"${l.disposition==='restock-putaway'?' selected':''}>Restock → via Putaway</option>
+                <option value="quarantine"${l.disposition==='quarantine'?' selected':''}>Quarantine</option>
+                <option value="damaged"${l.disposition==='damaged'?' selected':''}>Damaged</option></select>`
+            : `<span class="tag ${dispClass(l.disposition)}">${esc(DISP_LABEL[l.disposition]||l.disposition)}</span>`;
+          let locCell;
+          if (!open)                                   locCell = `<span class="mono">${esc(locName(l.toLoc))}</span>`;
+          else if (l.disposition==='restock-direct')   locCell = `<select id="loc-${i}" onchange="setLoc(${i},this.value)">${locOpts(l.toLoc)}</select><div class="req-note" id="cap-${i}" style="margin-top:3px"></div>`;
+          else if (l.disposition==='restock-putaway')  locCell = `<span class="tag tag-info">→ Putaway · ${esc(locName(stagingLoc(r.site))||'staging')}</span>`;
+          else if (l.disposition==='quarantine'||l.disposition==='damaged') locCell = `<span class="tag tag-block">→ ${esc(locName(quarLoc(r.site)))}</span>`;
+          else                                         locCell = `<span class="muted">— choose first —</span>`;
+          return `<tr><td>${esc(prodName(l.product))}</td><td class="mono">${tracksLot(l.product)?esc(l.lot||'—'):'<span class="muted">n/a</span>'}</td><td>${tracksExpiry(l.product)?esc(l.expiry||'—'):'<span class="muted">n/a</span>'}</td>
+            <td class="num">${l.qty}</td><td>${esc(l.reason||'—')}</td>
+            <td>${photoField({ ref:`${r.id}:L${i}`, level:'line', title:'Condition', readonly:!open })}</td>
+            <td>${noteField({ ref:`${r.id}:L${i}`, level:'line', title:'Condition', readonly:!open })}</td>
+            <td>${dispSel}</td><td>${locCell}</td>
+            <td>${l.lpn?`<span class="mono">${esc(l.lpn)}</span>`:'<span class="muted">—</span>'}</td></tr>`;
+        }).join('')+`</tbody>`;
+      if (open) r.lines.forEach((l,i)=>{ if(l.disposition==='restock-direct') capNote(i); });   // live capacity/segregation note
+
+      if (open){
+        $('p-actions').innerHTML = `<span class="req-note">Choose a disposition per line. <b>Restock → bin</b> places it <b>available</b> immediately at the chosen bin; <b>Restock → via Putaway</b> sends it to staging as a <b>directed-putaway task</b> (slotting + capacity + segregation are applied in Putaway); <b>Quarantine/Damaged</b> creates a blocked plate (excluded from allocation).</span>
+           <span class="right"><button class="btn btn-primary" onclick="processReturn()">Process &amp; close</button></span>`;
+      } else {
+        const dir=cur.lines.filter(l=>l.disposition==='restock'||l.disposition==='restock-direct').length;
+        const pa =cur.lines.filter(l=>l.disposition==='restock-putaway').length;
+        const bl =cur.lines.filter(l=>l.disposition&&!isRestock(l.disposition)).length;
+        $('p-actions').innerHTML = `<span class="req-note">Closed ${esc(cur.closed||'')} — ${dir} restocked${pa?`, ${pa} sent to putaway`:''}${bl?`, ${bl} blocked`:''}.</span>`;
+      }
+    }
+    function onDisp(i){
+      const l=cur.lines[i]; l.disposition=$('d-'+i).value;
+      if (l.disposition==='restock-direct' && !l.toLoc){ const f=storLocs(cur.site)[0]; l.toLoc=f?f.id:''; }
+      renderProc();   // re-render so the Destination cell matches the chosen disposition
+    }
+    function setLoc(i,v){ cur.lines[i].toLoc=v; capNote(i); }
+    // Live "fits / over-capacity / segregation" feedback for a direct-restock bin (shared rules from data.js).
+    function capNote(i){
+      const el=$('cap-'+i); if(!el) return;
+      const l=cur.lines[i]; const loc=($('loc-'+i)||{}).value || l.toLoc;
+      if(!loc){ el.innerHTML=''; return; }
+      if(!binSegregationOk(loc, cur.client)){ el.innerHTML=`<span class="tag tag-block">✗ segregation — this bin's Area is reserved for another client</span>`; return; }
+      const cap=binCapacityForAdd(loc, l.qty, l.product);
+      if(!cap.ok){ el.innerHTML=`<span class="tag tag-block">✗ over capacity — ${cap.fails.map(f=>f.after+'/'+f.limit+' '+f.dim).join(' · ')} — use “via Putaway” or another bin</span>`; return; }
+      const bin=DB.locations.find(x=>x.id===loc)||{}, parts=[];
+      if(bin.maxUnits!=null)    parts.push(`${cap.after.units}/${bin.maxUnits} units`);
+      if(bin.maxWeightKg!=null) parts.push(`${cap.after.weight}/${bin.maxWeightKg} kg`);
+      if(bin.maxLpns!=null)     parts.push(`${cap.after.lpns}/${bin.maxLpns} slots`);
+      el.innerHTML=`<span class="tag tag-ok">fits${parts.length?' — '+parts.join(' · '):''}</span>`;
+    }
+    function processReturn(){
+      const r=cur;
+      const ds = r.lines.map((l,i)=>($('d-'+i)||{}).value || l.disposition);
+      if (ds.some(d=>!d)){ alert('Choose a disposition for every line.'); return; }
+      const staging=stagingLoc(r.site), quar=quarLoc(r.site);
+      if (ds.includes('restock-putaway') && !staging){ alert('No inbound-staging (wait/put) location at this site to route Putaway through.'); return; }
+      if (ds.some(d=>d==='quarantine'||d==='damaged') && !quar){ alert('No quarantine location at this site.'); return; }
+      // hard guard: a direct-restock bin must pass the same capacity + segregation checks as Putaway
+      for (let i=0;i<r.lines.length;i++){
+        if (ds[i]!=='restock-direct') continue;
+        const l=r.lines[i], loc=($('loc-'+i)||{}).value || l.toLoc;
+        if (!binSegregationOk(loc, r.client)){ alert(`Line ${i+1} (${prodName(l.product)}): destination bin's Area is reserved for another client. Pick another bin, or use “Restock → via Putaway”.`); return; }
+        const cap=binCapacityForAdd(loc, l.qty, l.product);
+        if (!cap.ok){ alert(`Line ${i+1} (${prodName(l.product)}): destination bin is over capacity (${cap.fails.map(f=>f.after+'/'+f.limit+' '+f.dim).join(', ')}). Pick another bin, or use “Restock → via Putaway”.`); return; }
+      }
+      let restocked=0, toPutaway=0, blocked=0;
+      r.lines.forEach((l,i)=>{
+        const disp=ds[i]; const id=nextLpnId();
+        let status, finalLoc;
+        if (disp==='restock-direct'){ status='available';  finalLoc=($('loc-'+i)||{}).value || l.toLoc; restocked++; }
+        else if (disp==='restock-putaway'){ status='to-putaway'; finalLoc=staging; toPutaway++; }   // → Putaway queue
+        else { status=disp; finalLoc=quar; blocked++; }    // quarantine | damaged
+        const lp={ id, client:r.client, site:r.site, product:l.product, qty:l.qty, lot:l.lot||'', expiry:l.expiry||'',
+          serials:(l.serials||[]).slice(), status, loc:finalLoc };
+        DB.lpns.push(lp);
+        l.disposition=disp; l.toLoc=finalLoc; l.lpn=id;
+        logTxn({ type:'return', lpn:id, product:l.product, qty:l.qty, to:finalLoc, site:r.site, user:'Samer Merhi', ref:r.id,
+          note:`${KIND_LABEL[r.kind]} → ${DISP_LABEL[disp]||disp} (${l.reason})${disp==='restock-putaway'?' — directed putaway pending':''}` });
+      });
+      r.status='closed'; r.closed=TODAY;
+      const parts=[]; if(restocked)parts.push(`${restocked} restocked`); if(toPutaway)parts.push(`${toPutaway} sent to putaway`); if(blocked)parts.push(`${blocked} blocked`);
+      banner(`<b>${r.id}</b> processed — ${parts.join(', ')||'no lines'}, logged to audit trail.`);
+      renderTabs(); renderList(); show('list');
+    }
+
+    /* ============================================================ shared */
+    // Dispatch a return to a person (or clear it) from the process view; persists onto the live record.
+    function assignReturn(id, uid){ const r=DB.returns.find(x=>x.id===id); if(r){ r.assignee=uid; renderList(); } }
+    function nextId(prefix, coll, base){ let n=base; coll.forEach(x=>{ const m=new RegExp(prefix+'-(\\d+)').exec(x.id); if(m) n=Math.max(n,+m[1]); }); return prefix+'-'+(n+1); }
+    function show(v){ ['list','form','proc'].forEach(x=>$('view-'+x).style.display=x===v?'':'none'); window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ============================================================ init */
+    $('f-site').innerHTML=DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('h-site').innerHTML=$('f-site').innerHTML;
+    $('f-assignee').innerHTML = assigneeFilterOptions('', state.assignee);
+    $('f-site').addEventListener('change',e=>{ state.site=e.target.value; renderTabs(); renderList(); });
+    $('f-since').value = SINCE_DEFAULT;
+    $('f-since').addEventListener('change',e=>{ state.since=e.target.value; renderList(); });
+    $('f-kind').addEventListener('change',e=>{ state.kind=e.target.value; renderList(); });
+    $('f-assignee').addEventListener('change',e=>{ state.assignee=e.target.value; renderList(); });
+    $('f-q').addEventListener('input',e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    $('h-client').addEventListener('change',()=>{ fillRefs(); fillProds(); });
+    $('h-site').addEventListener('change',()=>{ $('h-assignee').innerHTML=assigneePickerOptions($('h-site').value, $('h-assignee').value); });
+    renderTabs(); renderList();
+  </script>
+</body></html>

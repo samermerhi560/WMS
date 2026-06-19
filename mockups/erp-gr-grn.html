@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GRN — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="gr-grn" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Goods Reception › GRN">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .grn-doc { background:var(--white); border:1px solid var(--line-soft); border-radius:var(--radius);
+        max-width:840px; margin:0 auto; padding:34px 40px; color:var(--ink); }
+      .grn-top { display:flex; justify-content:space-between; align-items:flex-start; gap:24px;
+        border-bottom:2px solid var(--ink); padding-bottom:16px; margin-bottom:20px; }
+      .grn-top .doc-h { font-size:24px; font-weight:700; letter-spacing:.02em; }
+      .grn-top .doc-sub { color:var(--ink-soft); font-size:13px; margin-top:2px; }
+      .grn-top .op { text-align:right; font-size:12.5px; color:var(--ink-soft); }
+      .grn-top .op b { color:var(--ink); display:block; font-size:14px; }
+      .grn-meta { display:grid; grid-template-columns:1fr 1fr; gap:18px 30px; margin-bottom:22px; }
+      .grn-meta .blk .k { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin-bottom:3px; }
+      .grn-meta .blk .v { font-size:13.5px; }
+      .grn-meta .blk .v b { display:block; font-size:14px; }
+      table.grn { width:100%; border-collapse:collapse; margin-bottom:8px; }
+      table.grn th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em;
+        color:var(--ink-soft); border-bottom:1.5px solid var(--ink); padding:7px 8px; white-space:nowrap; }
+      table.grn td { padding:8px; border-bottom:1px solid var(--line-soft); vertical-align:top; font-size:13px; }
+      table.grn .num { text-align:right; white-space:nowrap; }
+      .grn-tot { display:flex; justify-content:flex-end; gap:30px; font-size:13.5px; margin:14px 0 24px; }
+      .grn-tot b { font-size:15px; }
+      .grn-cond-accepted { color:var(--ok); font-weight:600; }
+      .grn-cond-quar { color:var(--bad); font-weight:600; }
+      .grn-note { background:var(--fill); border-left:3px solid var(--brand); padding:10px 14px;
+        font-size:12.5px; color:var(--ink-soft); border-radius:0 var(--radius) var(--radius) 0; margin-bottom:24px; }
+      .grn-serials { font-size:12px; color:var(--ink-soft); margin-bottom:24px; }
+      .grn-serials .mono { color:var(--ink); }
+      .grn-sign { display:grid; grid-template-columns:1fr 1fr; gap:40px; margin-top:30px; }
+      .grn-sign .slot { font-size:12.5px; }
+      .grn-sign .line { border-top:1px solid var(--ink); margin-top:42px; padding-top:5px; color:var(--ink-soft); }
+      @media print {
+        .erp-topbar, .erp-nav, .crumb, .no-print { display:none !important; }
+        .erp-main { padding:0 !important; max-width:none !important; }
+        body, .erp-body, .erp-main { background:#fff !important; }
+        .grn-doc { border:none; max-width:none; padding:0; }
+      }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div class="page-head"><h1>Goods Received Notes</h1>
+        <div class="acts"><button class="btn" disabled>Export</button></div></div>
+      <p class="sub">Confirmation documents issued to the client for received goods — <b>one GRN per physical receipt</b> (a multi-delivery ASN yields several GRNs). Received stock is held as <b>to&nbsp;putaway</b> (wait/put zone) and becomes available only after putaway.</p>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>GRN reference</span><input></label>
+          <label class="field"><span>Client</span><select><option>All clients</option><option>ACME Foods Ltd</option><option>Globex Pharma</option></select></label>
+          <label class="field"><span>Site</span><select><option>All sites</option><option>Lyon DC</option><option>Paris Hub</option></select></label>
+          <label class="field"><span>ASN reference</span><input></label>
+          <label class="field"><span>Received from</span><input type="date"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Date <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>GRN ref</th><th><span class="funnel">▾</span>Date</th>
+          <th><span class="funnel">▾</span>Client</th><th><span class="funnel">▾</span>Site</th>
+          <th><span class="funnel">▾</span>ASN</th><th><span class="funnel">▾</span>Lines</th>
+          <th><span class="funnel">▾</span>Status</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== DOCUMENT ===================== -->
+    <div id="view-doc" style="display:none">
+      <div class="page-head no-print"><h1 id="doc-title">GRN</h1>
+        <div class="acts">
+          <button class="btn btn-primary" onclick="window.print()">Print</button>
+          <button class="btn btn-outline" disabled>Email to client</button>
+          <button class="btn btn-outline" onclick="show('list')">Back</button>
+        </div></div>
+      <div class="crumb no-print"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="grn-doc" id="doc-body"></div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/barcode.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    /* ---- mock GRN records (local; references existing LPNs so the doc ties to the dataset) ---- */
+    const GRNS = [
+      { id:'GRN-5001', client:'C-ACME', site:'S-LYON', asn:'ASN-3001', date:'2026-06-15',
+        receivedBy:'Samer Merhi', inspectedBy:'Benjamin Felix', status:'issued', lpns:['LPN-00012','LPN-00013'] },
+      { id:'GRN-5002', client:'C-GLBX', site:'S-LYON', asn:'ASN-3002', date:'2026-06-14',
+        receivedBy:'Nicolas Masserey', inspectedBy:'Benjamin Felix', status:'issued', lpns:['LPN-00009'] },
+    ];
+
+    const lpn  = id => DB.lpns.find(x => x.id === id) || {};
+    const prd  = id => DB.products.find(x => x.id === id) || {};
+    const cond = l => (['quarantine','damaged','hold'].includes(l.status))
+        ? '<span class="grn-cond-quar">Quarantined</span>'
+        : (l.status === 'to-inspect') ? '<span class="grn-cond-quar">Under inspection</span>'
+        : '<span class="grn-cond-accepted">Accepted</span>';
+    // Map a receipt-line condition (good/inspect/damaged) to the GRN condition label.
+    const condLabel = c => (c === 'damaged') ? '<span class="grn-cond-quar">Quarantined</span>'
+        : (c === 'inspect') ? '<span class="grn-cond-quar">Under inspection</span>'
+        : '<span class="grn-cond-accepted">Accepted</span>';
+
+    // Merge live receipts (DB.grns, newest first — minted by Receive) ahead of the static seed.
+    // grnCreate records carry lines:[{product,qty,lot,expiry,condition,lpn}] + deliveryRef; seed records carry lpns:[].
+    function allGrns(){
+      const live = (DB.grns || []).slice().reverse();
+      return live.concat(GRNS);
+    }
+    function grnById(id){ return allGrns().find(g => g.id === id) || null; }
+    function grnLineCount(g){ return g.lines ? g.lines.length : (g.lpns ? g.lpns.length : 0); }
+
+    /* ---- list ---- */
+    function renderList(){
+      const list = allGrns();
+      document.getElementById('rows').innerHTML = list.length ? list.map(g => `
+        <tr><td><input type="checkbox" style="width:auto"></td><td class="dots">⋮</td>
+          <td class="mono"><a href="#" onclick="openDoc('${g.id}');return false">${g.id}</a></td>
+          <td>${(g.date||'').slice(0,10)}</td>
+          <td>${dbName('clients', g.client)}</td>
+          <td>${dbName('sites', g.site)}</td>
+          <td class="mono">${g.asn || '—'}</td>
+          <td>${grnLineCount(g)}</td>
+          <td><span class="badge b-dispatched">${g.status || 'issued'}</span></td>
+          <td><a href="#" onclick="openDoc('${g.id}');return false">Open ›</a></td></tr>`).join('')
+        : `<tr><td colspan="10" class="muted" style="padding:18px">No GRNs yet.</td></tr>`;
+    }
+
+    /* ---- document ---- */
+    function openDoc(id){
+      const g = grnById(id); if (!g) return;
+      const c = DB.clients.find(x => x.id === g.client) || {};
+      const s = DB.sites.find(x => x.id === g.site) || {};
+      const gdate = (g.date || '').slice(0,10);
+
+      // Normalise to a uniform line view-model regardless of record shape:
+      //  • live grnCreate record → g.lines:[{product,qty,lot,expiry,condition,lpn}]
+      //  • static seed record    → g.lpns:[ids] resolved against DB.lpns
+      const lines = g.lines
+        ? g.lines.map(L => { const lp = lpn(L.lpn); return {
+            id: L.lpn || lp.id || '—', product: L.product, qty: L.qty,
+            lot: L.lot || lp.lot || '', expiry: L.expiry || lp.expiry || '',
+            serials: lp.serials || [], condHtml: condLabel(L.condition) }; })
+        : g.lpns.map(lid => { const l = lpn(lid); return {
+            id: l.id || lid, product: l.product, qty: l.qty, lot: l.lot || '', expiry: l.expiry || '',
+            serials: l.serials || [], condHtml: cond(l) }; });
+
+      let totalUnits = 0;
+      const rows = lines.map((l,i) => {
+        const p = prd(l.product); totalUnits += (l.qty || 0);
+        return `<tr>
+          <td class="num">${i+1}</td>
+          <td>${p.name || l.product}<br><span class="muted mono" style="font-size:11px">${p.sku || ''}</span></td>
+          <td class="mono">${tracksLot(l.product) ? (l.lot || '—') : '<span class="muted">n/a</span>'}</td>
+          <td>${tracksExpiry(l.product) ? (l.expiry || '—') : '<span class="muted">n/a</span>'}</td>
+          <td class="num">${l.qty} ${p.uom || ''}</td>
+          <td class="mono">${l.id}</td>
+          <td>${l.condHtml}</td>
+          <td>${photoField({ ref:`${g.id}:L${i}`, level:'line', readonly:true })}</td>
+          <td>${noteField({ ref:`${g.id}:L${i}`, level:'line', readonly:true })}</td>
+        </tr>`;
+      }).join('');
+
+      // serial appendix
+      const serialBlocks = lines.filter(l => (prd(l.product).track||{}).serial && (l.serials||[]).length)
+        .map(l => `<div><b>${l.id}</b> · ${prd(l.product).name}: <span class="mono">${l.serials.join(', ')}</span></div>`).join('');
+
+      document.getElementById('doc-title').textContent = g.id;
+      document.getElementById('doc-body').innerHTML = `
+        <div class="grn-top">
+          <div>
+            <div class="doc-h">Goods Received Note</div>
+            <div class="doc-sub">${g.id} · issued ${gdate}</div>
+            <div style="margin-top:8px">${barcodeSVG(g.id,{height:38,module:1.4,font:9})}</div>
+          </div>
+          <div class="op">
+            <b>3PL Warehouse Operations</b>
+            ${s.name || ''}${s.city ? ', ' + s.city : ''}<br>${s.country || ''}
+          </div>
+        </div>
+
+        <div class="grn-meta">
+          <div class="blk"><div class="k">Client (stock owner)</div>
+            <div class="v"><b>${c.name || g.client}</b>${c.legal ? c.legal + '<br>' : ''}${c.contact ? c.contact + ' · ' : ''}${c.email || ''}${c.phone ? '<br>' + c.phone : ''}</div></div>
+          <div class="blk"><div class="k">Receipt details</div>
+            <div class="v">
+              GRN no: <b style="display:inline">${g.id}</b><br>
+              Site: ${s.name || ''}<br>
+              ASN reference: ${g.asn || '—'}<br>
+              ${g.deliveryRef ? `Supplier delivery note: ${g.deliveryRef}<br>` : ''}
+              Received: ${gdate}
+            </div></div>
+        </div>
+
+        <table class="grn">
+          <thead><tr><th class="num">#</th><th>Product</th><th>Lot/Batch</th><th>Expiry</th><th class="num">Qty</th><th>LPN</th><th>Condition</th><th>Photos</th><th>Notes</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+
+        <div class="grn-tot">
+          <span>License plates: <b>${lines.length}</b></span>
+          <span>Total units (base): <b>${totalUnits.toLocaleString()}</b></span>
+        </div>
+
+        ${serialBlocks ? `<div class="grn-serials"><div class="k" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);margin-bottom:4px">Serial numbers</div>${serialBlocks}</div>` : ''}
+
+        <div style="margin-bottom:24px">
+          <div class="k" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);margin-bottom:6px">Photos / evidence</div>
+          ${photoField({ ref:g.id, level:'header', readonly:true })}
+          ${noteField({ ref:g.id, level:'header', readonly:true })}
+        </div>
+
+        <div class="grn-note">
+          Goods recorded as received and held in the <b>wait/put</b> staging zone with status <b>to&nbsp;putaway</b>.
+          Stock is <b>not yet available</b> for outbound; it becomes available once putaway is confirmed.
+          Quantities and traceability above reflect what was physically received.
+        </div>
+
+        <div class="grn-sign">
+          <div class="slot">Received by<div class="line">${g.receivedBy || g.by || ''}</div></div>
+          <div class="slot">Inspected by<div class="line">${g.inspectedBy || ''}</div></div>
+          <div class="slot">Client acknowledgement<div class="line">Name / signature / date</div></div>
+          <div class="slot">Notes<div class="line">&nbsp;</div></div>
+        </div>`;
+      show('doc');
+    }
+
+    /* ---- view toggle + filter ---- */
+    function show(v){
+      document.getElementById('view-list').style.display = v === 'list' ? '' : 'none';
+      document.getElementById('view-doc').style.display  = v === 'doc'  ? '' : 'none';
+      window.scrollTo(0,0);
+    }
+    function toggleFilter(btn){
+      const f = document.getElementById('filters'); const hidden = f.style.display === 'none';
+      f.style.display = hidden ? '' : 'none'; btn.textContent = hidden ? 'Hide filter' : 'Show filter';
+    }
+
+    /* ---- init (supports deep-link ?grn=GRN-5001) ---- */
+    renderList();
+    const urlGrn = new URLSearchParams(location.search).get('grn');
+    if (urlGrn && grnById(urlGrn)) openDoc(urlGrn);
+  </script>
+</body></html>

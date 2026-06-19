@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Adjustments & Variances — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-variance" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Adjustments & Variances">
+  <div id="page-content">
+    <style>
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .src { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .src.s-adj  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .src.s-cor  { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .src.s-cnt  { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .src.s-phy  { border-color:#b08bc4; background:#f2e8f6; color:#5a2c6b; }
+      .print-only.phead { margin-bottom:10px; }
+    </style>
+
+    <div class="print-only phead"><h1>Adjustments &amp; Variances</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Adjustments &amp; Variances</h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">Inventory-accuracy / shrinkage KPI — quantity adjustments, attribute corrections, and count /
+      stock-take variances, by reason code. Reads <code>adjustments</code>, <code>counts</code>,
+      <code>physicals</code>. Posted/approved events have moved stock; pending ones are proposed.</p>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Filters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>From date</span><input type="date" id="f-since"></label>
+        <label class="field"><span>To date</span><input type="date" id="f-until"></label>
+        <label class="field"><span>Source type</span><select id="f-type">
+          <option value="all">All sources</option>
+          <option value="adjustment">Quantity adjustment</option>
+          <option value="correction">Attribute correction</option>
+          <option value="count">Cycle count</option>
+          <option value="physical">Physical inventory</option>
+        </select></label>
+        <label class="field"><span>Client</span><select id="f-client"></select></label>
+        <label class="field"><span>Reason</span><select id="f-reason"></select></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="table-toolbar no-print">
+      <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+      <button class="btn btn-sm btn-outline" onclick="window.print()">Print</button>
+      <span class="chip">↓ Date <span class="x">✕</span></span>
+      <span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th><span class="funnel">▾</span>Source</th>
+        <th><span class="funnel">▾</span>Ref</th>
+        <th><span class="funnel">▾</span>Date</th>
+        <th><span class="funnel">▾</span>Product</th>
+        <th><span class="funnel">▾</span>LPN / lot</th>
+        <th class="num">Variance</th>
+        <th><span class="funnel">▾</span>Reason</th>
+        <th><span class="funnel">▾</span>Status</th>
+        <th>Notes</th>
+      </tr></thead><tbody id="rows"></tbody></table>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    function clientOf(prod){ const p=DB.products.find(x=>x.id===prod); return p?p.client:''; }
+    const state = { since:'2026-06-01', until:'', type:'all', client:'all', reason:'all' };
+
+    // Build a flat, normalized variance feed from every source.
+    function buildFeed(){
+      const feed = [];
+      // 1) quantity adjustments + attribute corrections
+      (DB.adjustments||[]).forEach(a=>{
+        if (a.kind==='qty'){
+          const v = (a.dir==='decrease' ? -1 : 1) * (a.delta||0);
+          feed.push({ type:'adjustment', src:'Adjustment', cls:'s-adj', ref:a.id, date:a.posted||a.created,
+            client:a.client, product:a.product, lpn:a.lpn, lot:(lpnById(a.lpn)||{}).lot||'',
+            variance:v, reason:a.reason||'—', status:a.status });
+        } else {
+          const ch = (a.changes||[]).map(c=>`${c.field}: ${c.from}→${c.to}`).join(', ');
+          feed.push({ type:'correction', src:'Correction', cls:'s-cor', ref:a.id, date:a.posted||a.created,
+            client:a.client, product:a.product, lpn:a.lpn, lot:(lpnById(a.lpn)||{}).lot||'',
+            variance:0, reason:a.reason||'—', status:a.status, note:ch });
+        }
+      });
+      // 2) cycle-count sheets — one feed row per plate line with a variance
+      (DB.counts||[]).forEach(c=>{
+        (c.locations||[]).forEach(loc=>(loc.lines||[]).forEach(ln=>{
+          const v = (ln.countedQty==null?0:ln.countedQty) - (ln.systemQty||0);
+          if (v===0) return;
+          feed.push({ type:'count', src:'Count', cls:'s-cnt', ref:c.id, date:c.approved||c.countedDate||c.created,
+            client:clientOf(ln.product), product:ln.product, lpn:ln.lpn, lot:ln.lot||'',
+            variance:v, reason:'Cycle-count variance', status:c.status, loc:loc.loc });
+        }));
+      });
+      // 3) physical inventory — counted lines with a variance
+      (DB.physicals||[]).forEach(ph=>{
+        (ph.locations||[]).forEach(loc=>(loc.lines||[]).forEach(ln=>{
+          if (ln.countedQty==null) return;
+          const v = ln.countedQty - (ln.systemQty||0);
+          if (v===0) return;
+          feed.push({ type:'physical', src:'Physical', cls:'s-phy', ref:ph.id, date:ph.closed||ph.created,
+            client:clientOf(ln.product), product:ln.product, lpn:ln.lpn, lot:'',
+            variance:v, reason:'Stock-take variance', status:ph.status, loc:loc.loc });
+        }));
+      });
+      return feed;
+    }
+    const FEED = buildFeed();
+
+    function rowsData(){
+      return FEED.filter(r=>{
+        const d = String(r.date||'').slice(0,10);
+        if (state.since && d && d < state.since) return false;
+        if (state.until && d && d > state.until) return false;
+        if (state.type!=='all'   && r.type!==state.type)     return false;
+        if (state.client!=='all' && r.client!==state.client) return false;
+        if (state.reason!=='all' && r.reason!==state.reason) return false;
+        return true;
+      }).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+    }
+
+    function render(){
+      const list = rowsData();
+      $('rows').innerHTML = list.length ? list.map(r=>`
+        <tr>
+          <td><span class="src ${r.cls}">${esc(r.src)}</span></td>
+          <td class="mono">${esc(r.ref)}</td>
+          <td class="mono">${esc(String(r.date||'').slice(0,10))}</td>
+          <td>${esc(prodName(r.product))}</td>
+          <td class="mono">${esc(r.lpn||'—')}${r.lot?` · ${esc(r.lot)}`:''}</td>
+          <td class="num">${r.type==='correction'?'<span class="muted">attr</span>':(r.variance>0?`<span class="pos">+${r.variance}</span>`:r.variance<0?`<span class="neg">${r.variance}</span>`:'0')}</td>
+          <td>${esc(r.reason)}${r.note?` <span class="muted">· ${esc(r.note)}</span>`:''}</td>
+          <td>${statusBadge(r.status==='posted'||r.status==='approved'?'available':r.status==='pending'||r.status==='pending-approval'?'to-putaway':'dispatched')}<span class="muted" style="margin-left:6px">${esc(r.status)}</span></td>
+          <td>${noteFor(r.ref) || noteFor(r.lpn) || '<span class="muted">—</span>'}</td>
+        </tr>`).join('')
+        : `<tr><td colspan="9" class="muted" style="padding:18px">No variances match the filters in this period.</td></tr>`;
+
+      // KPIs — on APPLIED events only (posted / approved)
+      const applied = list.filter(r=>['posted','approved'].includes(r.status));
+      const net = applied.reduce((s,r)=>s+r.variance,0);
+      const shrink = applied.filter(r=>r.variance<0).reduce((s,r)=>s+r.variance,0);
+      const gain = applied.filter(r=>r.variance>0).reduce((s,r)=>s+r.variance,0);
+      const pend = list.filter(r=>['pending','pending-approval'].includes(r.status)).length;
+      $('kpis').innerHTML = `
+        <div class="kpi"><span class="k-label">Variance events</span><span class="k-val">${list.length}</span><span class="k-sub">${applied.length} applied</span></div>
+        <div class="kpi k-bad"><span class="k-label">Shrinkage</span><span class="k-val">${shrink}</span><span class="k-sub">units lost (applied)</span></div>
+        <div class="kpi k-good"><span class="k-label">Gains</span><span class="k-val">+${gain}</span><span class="k-sub">units found (applied)</span></div>
+        <div class="kpi ${net<0?'k-bad':net>0?'k-good':''}"><span class="k-label">Net variance</span><span class="k-val">${net>0?'+'+net:net}</span></div>
+        <div class="kpi k-warn"><span class="k-label">Pending approval</span><span class="k-val">${pend}</span></div>`;
+      $('summary').textContent = `${list.length} variance event(s)`;
+      $('p-filters').textContent = `${state.since||'—'} → ${state.until||WMS_TODAY}  ·  Type: ${state.type}  ·  Client: ${state.client==='all'?'All':dbName('clients',state.client)}  ·  Reason: ${state.reason}`;
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-since').value = state.since;
+    $('f-type').value = state.type;
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    const reasons = [...new Set(FEED.map(r=>r.reason))].sort();
+    $('f-reason').innerHTML = `<option value="all">All reasons</option>` + reasons.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
+    $('f-since').addEventListener('change',  e=>{ state.since=e.target.value; render(); });
+    $('f-until').addEventListener('change',  e=>{ state.until=e.target.value; render(); });
+    $('f-type').addEventListener('change',   e=>{ state.type=e.target.value; render(); });
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; render(); });
+    $('f-reason').addEventListener('change', e=>{ state.reason=e.target.value; render(); });
+    render();
+  </script>
+</body></html>

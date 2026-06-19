@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Location lookup — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Location lookup" data-pwa-back="pwa-home.html">
+  <div id="page-content"><div id="lk"></div></div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const root = document.getElementById('lk');
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+    // candidate list = every location at the current site
+    const locList = () => DB.locations.filter(l => l.site===PWA.ctx.siteId)
+      .map(l => ({ value:l.id, label:l.structured||l.id, sub:`${l.type}${l.userRef?' · '+l.userRef:''}` }));
+
+    function capLine(loc){
+      if (loc.type!=='storage') return '';
+      const load = binLoad(loc.id), lim = [];
+      if (loc.maxUnits   !=null) lim.push(`${load.units}/${loc.maxUnits} units`);
+      if (loc.maxWeightKg!=null) lim.push(`${load.weight}/${loc.maxWeightKg} kg`);
+      if (loc.maxLpns    !=null) lim.push(`${load.lpns}/${loc.maxLpns} slots`);
+      return lim.length ? `<div class="muted">Load: ${lim.join(' · ')}</div>` : '';
+    }
+
+    function locPanel(loc){
+      const area   = loc.area ? `${loc.area} — ${esc((areaInfo(loc.site,loc.area)||{}).name||'')}` : '—';
+      const ft     = frozenTakeFor(loc.id);
+      const frozen = ft ? ` <span class="badge b-quarantine">frozen · ${esc(ft.id)}</span>` : '';
+      const stock  = lpnsAtLoc(loc.id);
+      const rows = stock.length
+        ? stock.map(l => `<div class="task">
+            <span class="meta"><b>${esc(l.id)}</b><small>${esc(prodName(l.product))}${l.lot?' · lot '+esc(l.lot):''}${l.expiry?' · exp '+esc(l.expiry):''}</small></span>
+            ${statusBadge(l.status)} <span class="badge">${l.qty} ${esc(prodUom(l.product))}</span></div>`).join('')
+        : `<p class="scan-hint" style="text-align:left">No stock at this location.</p>`;
+      return `<div class="panel" style="margin-bottom:10px">
+          <b class="mono">${esc(loc.structured||loc.id)}</b> ${statusBadge(loc.status)}${frozen}<br>
+          <span class="muted mono">${esc(loc.id)}</span>
+          <div class="spacer"></div>
+          <div class="muted">${esc(dbName('sites',loc.site))} · ${esc(loc.type)}${loc.userRef?' · '+esc(loc.userRef):''}</div>
+          <div class="muted">Area: ${area}</div>
+          ${capLine(loc)}
+        </div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Stock here (${stock.length})</p>
+        ${rows}`;
+    }
+
+    function errPanel(t){ return `<div class="panel" style="border-color:#e6bcbc;background:#fbeaea">${t}</div>`; }
+
+    function render(code, resolved){
+      let html = PWAScan.field({ id:'sf-loc', prompt:'Scan a location', autofocus:true,
+        placeholder:'LOC-A0101  ·  1-A-01-R1-B01', kinds:['location'],
+        hint:'Read-only — shows what is stored at the location.', list:locList(), onScan:onScan });
+      if (code!==undefined){
+        if (resolved && resolved.type==='location') html += locPanel(resolved.entity);
+        else if (resolved) html += errPanel(`<b>That's a ${esc(resolved.type)}, not a location.</b><div class="muted mono">${esc(code)} → ${esc(resolved.label)}</div>`);
+        else html += errPanel(`<b>Not found</b><div class="muted mono">${esc(code)}</div><div class="spacer"></div><div>No location matches that code at ${esc(PWA.siteName())}.</div>`);
+      }
+      html += `<div class="spacer"></div><a class="btn btn-outline" href="pwa-home.html" style="display:block;text-align:center">Done</a>`;
+      root.innerHTML = html;
+      const inp = root.querySelector('.sb-input'); if (inp) inp.focus();
+    }
+    function onScan(code, resolved){ render(code, resolved); }
+    render();
+  })();
+  </script>
+</body>
+</html>

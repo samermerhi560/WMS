@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Repack / Re-kit — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Repack / Re-kit" data-pwa-back="pwa-home.html">
+  <div id="page-content">
+    <style>
+      .seg { display:flex; gap:6px; margin:4px 0 12px; flex-wrap:wrap; }
+      .seg button { flex:1; min-width:70px; border:1.5px solid var(--line); background:var(--white); border-radius:var(--radius); padding:9px 6px; font:inherit; font-size:13px; cursor:pointer; }
+      .seg button.on { border-color:var(--brand); background:var(--brand-tint); font-weight:700; }
+      .seg button small { display:block; font-weight:400; color:var(--ink-soft); font-size:10.5px; margin-top:2px; }
+      .src { border:1px solid var(--line-soft); border-radius:var(--radius); padding:8px 11px; margin-bottom:8px; background:var(--white); font-size:13px; }
+      .src .lh { font-weight:700; } .src small { color:var(--ink-soft); }
+      .outc { border:1px solid var(--line-soft); border-radius:var(--radius); padding:10px 12px; margin-bottom:8px; background:var(--white); }
+      .outc .of { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
+      .outc .field { margin-bottom:0; } .outc input[type=number]{ width:84px; }
+      .arrow { text-align:center; color:var(--ink-faint); font-size:16px; margin:4px 0; }
+      .bal { font-size:13px; padding:8px 12px; border-radius:var(--radius); margin:8px 0; }
+      .bal.ok { background:#e6f3e7; border:1px solid #6fae72; color:#235c25; }
+      .bal.bad{ background:#f6e7e7; border:1px solid #c47e7e; color:#7a2c2c; }
+      .sum-row { display:flex; justify-content:space-between; gap:10px; padding:5px 0; border-bottom:1px solid var(--line-soft); font-size:13px; }
+      .sum-row:last-child { border-bottom:none; }
+      .req { color:var(--bad); }
+    </style>
+    <div id="rpk-flash" class="sb-msg" style="display:none"></div>
+    <div id="rpk"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,Math.floor(Number(v)||0)));
+    const root = $('rpk');
+    const TODAY = '2026-06-15';
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const uomOf = pid => prodUom(pid) || '';
+    const KIND_LABEL = { split:'Split', merge:'Merge', repack:'Repack', rekit:'Re-kit' };
+    const storLocs = () => DB.locations.filter(l=>l.site===site() && l.type==='storage' && l.status==='active');
+    const nextRpkId = () => { let n=7000; DB.repacks.forEach(r=>{ const m=/RPK-(\d+)/.exec(r.id); if(m) n=Math.max(n,+m[1]); }); return 'RPK-'+(n+1); };
+    // S.kind + S.sources[] + S.outputs[] build the job; committed on Confirm.
+    const S = { view:'list', tab:'new', kind:'split', sources:[], outputs:[], last:null, viewId:null };
+
+    function flash(t){ const m=$('rpk-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('rpk-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('rpk-flash'); if(m) m.style.display='none'; }
+
+    const srcQty = () => S.sources.reduce((s,x)=>s+(x.qty||0),0);
+    const outQty = () => S.outputs.reduce((s,o)=>s+(+o.qty||0),0);
+    const eligible = l => l.site===site() && l.client===client() && l.status==='available' && (l.qty||0)>0;
+    const productOpts = sel => DB.products.filter(p=>p.client===client()).map(p=>`<option value="${p.id}"${p.id===sel?' selected':''}>${esc(prodName(p.id))}</option>`).join('');
+    const locOpts = sel => storLocs().map(l=>`<option value="${l.id}"${l.id===sel?' selected':''}>${esc(l.structured||l.id)}</option>`).join('');
+
+    /* ============================================================ LIST (New job / Recent) */
+    function tabsHtml(){
+      return `<div class="tabs">
+        <a href="#" id="t-new" class="${S.tab!=='recent'?'active':''}">New job</a>
+        <a href="#" id="t-recent" class="${S.tab==='recent'?'active':''}">Recent</a></div>`;
+    }
+    function wireTabs(){ const n=$('t-new'),r=$('t-recent');
+      if(n) n.onclick=e=>{e.preventDefault(); S.tab='new'; render();};
+      if(r) r.onclick=e=>{e.preventDefault(); S.tab='recent'; render();}; }
+    function renderList(){ if (S.tab==='recent') return renderRecent(); renderNew(); }
+    function renderNew(){
+      root.innerHTML = tabsHtml() + `
+        <div class="panel" style="margin-bottom:10px"><b>New repack job</b>
+          <div class="seg" style="margin-top:8px">
+            <button data-k="split"  class="${S.kind==='split'?'on':''}">Split<small>1 → several</small></button>
+            <button data-k="merge"  class="${S.kind==='merge'?'on':''}">Merge<small>several → 1</small></button>
+            <button data-k="repack" class="${S.kind==='repack'?'on':''}">Repack<small>new packaging</small></button>
+            <button data-k="rekit"  class="${S.kind==='rekit'?'on':''}">Re-kit<small>assemble / break</small></button>
+          </div>
+          <div class="muted" style="font-size:12px">${esc(kindHint())}</div></div>
+        ${PWAScan.field({ id:'sf-src', prompt:'Scan the source plate (LPN)', autofocus:true, placeholder:'LPN-00050', kinds:['lpn'],
+            list:DB.lpns.filter(eligible).map(l=>({value:l.id,label:l.id,sub:`${prodName(l.product)} · ${l.qty}`})), onScan:onScanSource })}
+        <p class="scan-hint" style="text-align:left">Scan a source plate to begin. Source stock is consumed; new plate(s) are created with the same lot/expiry/serial genealogy.</p>`;
+      wireTabs();
+      root.querySelectorAll('[data-k]').forEach(el=>el.onclick=()=>{ S.kind=el.dataset.k; S.sources=[]; S.outputs=[]; render(); });
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function kindHint(){ return { split:'Split one plate into several smaller plates (same product & lot). Any remainder stays on the source.',
+      merge:'Merge plates of the SAME product, lot & expiry into one. All sources are consumed.',
+      repack:'Repack a plate into a new packaging/UoM — quantity & genealogy unchanged.',
+      rekit:'Assemble component plates into a kit, or break a kit down — define the outputs freely.' }[S.kind]; }
+    function onScanSource(code, r){
+      if (!(r && r.type==='lpn')) return flash('Scan a source plate (LPN).');
+      const l=r.entity;
+      if (!eligible(l)) return flash(`${l.id} can't be a source — must be available stock (>0) for ${PWA.clientName()} at ${PWA.siteName()}.`);
+      const fz=frozenTakeFor(l.loc); if(fz) return flash(`${l.id} is in a frozen stock-take (${fz.id}) — repack refused until it is posted/abandoned.`);
+      S.sources=[{ lpn:l.id, product:l.product, qty:l.qty, lot:l.lot||'', expiry:l.expiry||'', loc:l.loc }];
+      seedOutputs(); S.view='build'; render();
+    }
+
+    /* ============================================================ RECENT (read-only) */
+    function renderRecent(){
+      const list=DB.repacks.filter(r=>r.site===site()).sort((a,b)=>String(b.created).localeCompare(String(a.created))||String(b.id).localeCompare(String(a.id))).slice(0,25);
+      const cards=list.length?list.map(r=>`<div class="task" data-job="${esc(r.id)}"><span class="meta"><b>${esc(r.id)}</b>
+        <small>${esc(KIND_LABEL[r.kind]||r.kind)} · ${r.sources.length}→${r.outputs.length} plate(s)${r.created?' · '+esc(r.created):''}</small></span><span class="badge b-available">done</span></div>`).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No repack jobs at ${esc(PWA.siteName())} yet.</p></div>`;
+      root.innerHTML = tabsHtml() + `<p class="scan-hint" style="text-align:left;margin-left:2px">Recent jobs at ${esc(PWA.siteName())} (${list.length})</p>${cards}`;
+      wireTabs();
+      root.querySelectorAll('[data-job]').forEach(el=>el.onclick=()=>{ S.viewId=el.dataset.job; S.view='jobview'; render(); });
+    }
+
+    /* ============================================================ BUILD (sources + outputs + confirm) */
+    function seedOutputs(){
+      const s0=S.sources[0]; if(!s0){ S.outputs=[]; return; }
+      if (S.kind==='split'){ const half=Math.floor(s0.qty/2); S.outputs=[{ product:s0.product, qty:half||s0.qty, lot:s0.lot, expiry:s0.expiry, loc:s0.loc }]; }
+      else if (S.kind==='merge'){ S.outputs=[{ product:s0.product, qty:srcQty(), lot:s0.lot, expiry:s0.expiry, loc:s0.loc }]; }
+      else if (S.kind==='repack'){ S.outputs=[{ product:s0.product, qty:s0.qty, lot:s0.lot, expiry:s0.expiry, loc:s0.loc, note:'Repacked' }]; }
+      else { S.outputs=[{ product:s0.product, qty:s0.qty, lot:s0.lot, expiry:s0.expiry, loc:s0.loc }]; }
+    }
+    function renderBuild(){
+      const s0=S.sources[0]; if(!s0){ S.view='list'; return render(); }
+      const multiSrc = (S.kind==='merge'||S.kind==='rekit');
+      const srcCards = S.sources.map((s,i)=>`<div class="src"><div class="lh">${esc(s.lpn)} <small>· ${esc(prodName(s.product))} · ${s.qty} ${esc(uomOf(s.product))}${tracksLot(s.product)&&s.lot?' · lot '+esc(s.lot):''} @ ${esc(locName(s.loc))}</small></div>
+        ${multiSrc&&S.sources.length>1?`<a href="#" data-rmsrc="${i}" style="color:var(--bad);font-size:12px">remove</a>`:''}</div>`).join('');
+      const outEditable = S.kind!=='repack';     // repack qty is locked to source
+      const outCards = S.outputs.map((o,i)=>{
+        const prodField = S.kind==='rekit' ? `<label class="field"><span>Product</span><select data-of="${i}" data-k="product">${productOpts(o.product)}</select></label>` : '';
+        const lotField = (S.kind==='rekit' && tracksLot(o.product)) ? `<label class="field"><span>Lot</span><input data-of="${i}" data-k="lot" value="${esc(o.lot||'')}" style="width:90px"></label>` : '';
+        return `<div class="outc">
+          <div class="of">
+            ${prodField || `<div style="flex:1"><b>${esc(prodName(o.product))}</b>${tracksLot(o.product)&&o.lot?`<br><small class="muted">lot ${esc(o.lot)}</small>`:''}</div>`}
+            <label class="field"><span>Qty</span><input type="number" min="${S.kind==='split'?1:0}" step="1" value="${o.qty}" data-of="${i}" data-k="qty"${outEditable?'':' disabled'}></label>
+          </div>
+          <div class="of" style="margin-top:6px">
+            ${lotField}
+            <label class="field" style="flex:1"><span>Location</span><select data-of="${i}" data-k="loc">${locOpts(o.loc)}</select></label>
+            ${S.kind==='repack'?`<label class="field" style="flex:1"><span>Packaging</span><input data-of="${i}" data-k="note" value="${esc(o.note||'')}" placeholder="e.g. cartons of 24"></label>`:''}
+            ${(S.kind==='split'||S.kind==='rekit')&&S.outputs.length>1?`<a href="#" data-rmout="${i}" style="color:var(--bad);font-size:12px;align-self:center">✕</a>`:''}
+          </div></div>`;
+      }).join('');
+      const bal = balance();
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b>${esc(KIND_LABEL[S.kind])} job</b>
+          <div class="muted" style="font-size:12px;margin-top:2px">${esc(PWA.clientName())} @ ${esc(PWA.siteName())}</div></div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Source plate(s) — consumed</p>
+        ${srcCards}
+        ${multiSrc?PWAScan.field({ id:'sf-src2', prompt:S.kind==='merge'?'Scan another plate (same product + lot)':'Scan another source plate', placeholder:'LPN-…', kinds:['lpn'], onScan:onScanMore }):''}
+        <div class="arrow">▼</div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Output plate(s) — created</p>
+        ${(S.kind==='split'||S.kind==='rekit')?`<button class="btn btn-outline btn-sm" id="add-out" style="width:100%;margin-bottom:8px">+ Add output plate</button>`:''}
+        ${outCards}
+        <div class="bal ${bal.ok?'ok':'bad'}">${bal.msg}</div>
+        <div style="margin:6px 0">${photoField({ ref:'repack-job', level:'header', title:'Before / after photo (optional)' })}</div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="b-confirm" style="width:100%"${bal.ok?'':' disabled'}>Confirm job</button>
+        <button class="btn btn-outline" id="b-back" style="width:100%">‹ Cancel</button>`;
+      root.querySelectorAll('[data-rmsrc]').forEach(el=>el.onclick=e=>{ e.preventDefault(); S.sources.splice(+el.dataset.rmsrc,1); if(S.kind==='merge') S.outputs[0]&&(S.outputs[0].qty=srcQty()); render(); });
+      root.querySelectorAll('[data-rmout]').forEach(el=>el.onclick=e=>{ e.preventDefault(); S.outputs.splice(+el.dataset.rmout,1); render(); });
+      root.querySelectorAll('[data-of]').forEach(el=>{ const i=+el.dataset.of, k=el.dataset.k;
+        el.oninput=el.onchange=()=>{ S.outputs[i][k] = k==='qty'?Math.max(0,parseInt(el.value,10)||0):el.value; if(k==='product') render(); else paintBal(); }; });
+      const ao=$('add-out'); if(ao) ao.onclick=()=>{ const s0=S.sources[0]; S.outputs.push({ product:s0.product, qty:0, lot:S.kind==='rekit'?'':s0.lot, expiry:S.kind==='rekit'?'':s0.expiry, loc:s0.loc }); render(); };
+      $('b-confirm').onclick=confirmJob;
+      $('b-back').onclick=()=>{ S.sources=[]; S.outputs=[]; S.view='list'; S.tab='new'; render(); };
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanMore(code, r){
+      if (!(r && r.type==='lpn')) return flash('Scan a plate (LPN).');
+      const l=r.entity;
+      if (!eligible(l)) return flash(`${l.id} isn't available stock for ${PWA.clientName()} at ${PWA.siteName()}.`);
+      if (S.sources.some(s=>s.lpn===l.id)) return flash(`${l.id} is already a source.`);
+      if (frozenTakeFor(l.loc)) return flash(`${l.id} is in a frozen stock-take.`);
+      if (S.kind==='merge'){ const f=S.sources[0];
+        if (l.product!==f.product || (l.lot||'')!==(f.lot||'') || (l.expiry||'')!==(f.expiry||'')) return flash('Merge needs the SAME product, lot & expiry.'); }
+      S.sources.push({ lpn:l.id, product:l.product, qty:l.qty, lot:l.lot||'', expiry:l.expiry||'', loc:l.loc });
+      if (S.kind==='merge') S.outputs[0].qty=srcQty();
+      render(); ok(`${l.id} added.`);
+    }
+    function balance(){
+      const inQ=srcQty(), outQ=outQty();
+      if (!S.sources.length) return { ok:false, msg:'Scan a source plate.' };
+      if (S.kind==='split'){ if(outQ>inQ) return { ok:false, msg:`Outputs (${outQ}) exceed the source (${inQ}). Reduce them.` };
+        if(outQ<=0) return { ok:false, msg:'Give each output a quantity.' };
+        return { ok:true, msg:`Splitting <b>${outQ}</b> of ${inQ} — remainder on source: <b>${inQ-outQ}</b>.` }; }
+      if (S.kind==='merge'){ if(S.sources.length<2) return { ok:false, msg:'Add at least two plates to merge.' };
+        return { ok:true, msg:`Merging ${S.sources.length} plate(s) → <b>${outQ}</b> ${esc(uomOf(S.sources[0].product))} on one plate.` }; }
+      if (S.kind==='repack') return { ok:true, msg:`Repacking <b>${inQ}</b> ${esc(uomOf(S.sources[0].product))} into new packaging — quantity unchanged.` };
+      if (S.outputs.some(o=>!(+o.qty>0))) return { ok:false, msg:'Every output needs a quantity.' };
+      if (S.outputs.some(o=>!o.product)) return { ok:false, msg:'Every output needs a product.' };
+      return { ok:true, msg:`Consuming ${inQ} → creating <b>${outQ}</b> across ${S.outputs.length} plate(s).` };
+    }
+    function paintBal(){ const b=balance(); const el=root.querySelector('.bal'); if(el){ el.className='bal '+(b.ok?'ok':'bad'); el.innerHTML=b.msg; } const c=$('b-confirm'); if(c) c.disabled=!b.ok; }
+    function confirmJob(){
+      const b=balance(); if(!b.ok) return flash('Resolve the balance before confirming.');
+      for (const s of S.sources){ const fz=frozenTakeFor(lpnById(s.lpn).loc); if(fz) return flash(`${s.lpn} is in a frozen stock-take (${fz.id}) — repack refused.`); }
+      const inQ=srcQty(), outQ=outQty(), src=lpnById(S.sources[0].lpn);
+      const createdOut=[];
+      S.outputs.forEach(o=>{ const id=nextLpnId();
+        DB.lpns.push({ id, client:src.client, site:site(), product:o.product, qty:+o.qty||0, lot:o.lot||'', expiry:o.expiry||'',
+          serials:(S.kind==='repack'||S.kind==='merge')?(src.serials||[]).slice():[], status:'available', loc:o.loc });
+        createdOut.push({ lpn:id, product:o.product, qty:+o.qty||0, lot:o.lot||'', expiry:o.expiry||'', loc:o.loc, note:o.note||'' });
+      });
+      const consumedSrc=[];
+      S.sources.forEach((s,idx)=>{ const lp=lpnById(s.lpn); consumedSrc.push({ lpn:s.lpn, product:s.product, qty:s.qty });
+        if (S.kind==='split' && idx===0){ const rem=inQ-outQ; lp.qty=rem; if(rem<=0) lp.status='consumed'; }
+        else { lp.qty=0; lp.status='consumed'; } });
+      const job={ id:nextRpkId(), kind:S.kind, site:site(), status:'confirmed', created:TODAY, by:PWA.user, sources:consumedSrc, outputs:createdOut };
+      DB.repacks.push(job);
+      logTxn({ type:'repack', lpn:consumedSrc.map(s=>s.lpn).join(','), product:consumedSrc[0].product, qty:outQ, site:site(),
+        user:PWA.user, ref:job.id, note:`${KIND_LABEL[S.kind]}: ${consumedSrc.map(s=>s.lpn).join('+')} → ${createdOut.map(o=>o.lpn).join('+')}` });
+      PWA.save();
+      S.last={ id:job.id, kind:S.kind, consumed:consumedSrc.slice(), created:createdOut.slice(), remainder:(S.kind==='split'?inQ-outQ:0), srcLpn:S.sources[0].lpn };
+      S.sources=[]; S.outputs=[]; S.view='done'; render();
+    }
+
+    /* ============================================================ DONE + read-only view */
+    function renderDone(){
+      const L=S.last||{};
+      const outs=(L.created||[]).map(o=>`<div class="sum-row"><span>${esc(prodName(o.product))} <span class="muted">→ ${esc(locName(o.loc))}${o.note?' · '+esc(o.note):''}</span></span><span class="mono">${esc(o.lpn)} · ${o.qty}</span></div>`).join('');
+      root.innerHTML=`
+        <div class="success"><div class="check">✓</div><p><b>${esc(L.id)}</b> (${esc(KIND_LABEL[L.kind])}) confirmed — ${(L.consumed||[]).length} consumed, ${(L.created||[]).length} created.</p></div>
+        <div class="panel" style="margin:10px 0">${outs}
+          ${L.kind==='split'?`<div class="sum-row"><span class="muted">remainder on ${esc(L.srcLpn)}</span><span class="mono">${L.remainder}</span></div>`:''}</div>
+        <button class="btn btn-primary" id="d-more" style="width:100%">New job</button>
+        <button class="btn btn-outline" id="d-recent" style="width:100%">Recent jobs</button>
+        <button class="btn btn-outline" id="d-home" style="width:100%">Home</button>`;
+      $('d-more').onclick=()=>{ S.last=null; S.tab='new'; S.view='list'; render(); };
+      $('d-recent').onclick=()=>{ S.last=null; S.tab='recent'; S.view='list'; render(); };
+      $('d-home').onclick=()=>{ location.href='pwa-home.html'; };
+    }
+    function renderJobView(){
+      const r=DB.repacks.find(x=>x.id===S.viewId); if(!r){ S.view='list'; S.tab='recent'; return render(); }
+      const rows=(arr,out)=>arr.map(x=>`<div class="sum-row"><span>${esc(prodName(x.product))} <span class="muted">${out?'→ '+esc(locName(x.loc)):''}</span></span><span class="mono">${esc(x.lpn)} · ${x.qty}</span></div>`).join('');
+      root.innerHTML=`
+        <div class="panel" style="margin-bottom:10px"><b>${esc(KIND_LABEL[r.kind]||r.kind)} <span class="mono">${esc(r.id)}</span></b> <span class="badge b-available">confirmed</span>
+          <div class="muted" style="margin-top:4px">${esc(PWA.siteName())} · by ${esc(r.by||'—')}${r.created?' · '+esc(r.created):''}</div></div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Consumed</p><div class="panel" style="margin-bottom:8px">${rows(r.sources,false)}</div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Created</p><div class="panel" style="margin-bottom:10px">${rows(r.outputs,true)}</div>
+        <button class="btn btn-outline" id="jv-back" style="width:100%">‹ Back to recent</button>`;
+      $('jv-back').onclick=()=>{ S.viewId=null; S.tab='recent'; S.view='list'; render(); };
+    }
+
+    function render(){
+      flashClear();
+      ({ list:renderList, build:renderBuild, done:renderDone, jobview:renderJobView }[S.view] || renderList)();
+    }
+    const q=new URLSearchParams(location.search), deep=q.get('lpn');
+    if (deep){ const l=lpnById(deep); if(l && eligible(l) && !frozenTakeFor(l.loc)){ S.kind='split'; S.sources=[{ lpn:l.id, product:l.product, qty:l.qty, lot:l.lot||'', expiry:l.expiry||'', loc:l.loc }]; seedOutputs(); S.view='build'; } }
+    render();
+  })();
+  </script>
+</body>
+</html>

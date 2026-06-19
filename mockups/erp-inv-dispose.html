@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Disposal / Scrap — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="inv-dispose" data-erp-title="Inventory Ops"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Inventory Ops › Disposal / Scrap">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-ok    { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-warn  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-bad   { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .tag.tag-info  { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+
+      .badge.b-pending  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .badge.b-posted   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .badge.b-rejected { border-color:#9a9a9a; background:#eee; color:#555; }
+
+      .stockcard { border:1px solid var(--line-soft); border-radius:var(--radius); background:var(--fill);
+        padding:12px 14px; margin-bottom:14px; }
+      .review-box { border:1px solid var(--line-soft); border-radius:var(--radius); background:var(--white);
+        padding:14px 16px; margin-bottom:14px; }
+      .req-note { font-size:12px; color:var(--ink-soft); }
+      .approve-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .approve-bar .right { margin-left:auto; display:flex; gap:8px; align-items:center; }
+
+      .viewas { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--ink-soft); }
+      .viewas select { min-width:200px; }
+      .mc-note { font-size:12px; color:#7a2c2c; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Disposal / Scrap</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn btn-primary" onclick="openNew()">+ New disposal</button></div>
+      </div>
+      <p class="sub">First-class write-off of <b>blocked or expired</b> stock — scrap, destroy or write-off — replacing the
+        generic quantity-decrease in Adjustments. Each disposal is reason-coded, requires <b>supervisor approval by a
+        different user</b> (maker-checker), and on approval removes the quantity from the plate and writes the audit trail.</p>
+
+      <div class="tabs" id="tabs"></div>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right">
+            <span class="viewas" title="Maker-checker demo — switch the acting user to approve">View as
+              <select id="view-as"></select></span>
+            <button class="btn btn-sm" onclick="toggleFilter(this)" style="margin-left:10px">Hide filter</button>
+          </span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site (operator)</span><select id="f-site"></select></label>
+          <label class="field"><span>Client</span><select id="f-client"></select></label>
+          <label class="field"><span>Method</span><select id="f-method">
+            <option value="all">All methods</option><option value="scrap">Scrap</option>
+            <option value="destroy">Destroy</option><option value="writeoff">Write-off</option>
+          </select></label>
+          <label class="field"><span>Assignee</span><select id="f-assignee"></select></label>
+          <label class="field"><span>Product / LPN / ID</span><input id="f-q" placeholder="Search…"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Date <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>ID</th><th><span class="funnel">▾</span>Date</th>
+          <th><span class="funnel">▾</span>Product</th><th><span class="funnel">▾</span>LPN</th>
+          <th class="num">Qty</th><th><span class="funnel">▾</span>Method</th>
+          <th><span class="funnel">▾</span>Reason</th><th>Raised by</th>
+          <th><span class="funnel">▾</span>Status</th>
+          <th><span class="funnel">▾</span>Assignee</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== CREATE FORM ===================== -->
+    <div id="view-form" style="display:none">
+      <div class="page-head"><h1>New disposal</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+
+      <div class="panel">
+        <fieldset><legend>Stock plate (blocked or expired only)</legend>
+          <div class="field-row">
+            <label class="field" style="flex:2"><span>Site</span><select id="s-site"></select></label>
+            <label class="field" style="flex:3"><span>Plate (LPN) <span class="req">*</span></span><select id="s-lpn"></select></label>
+          </div>
+          <div class="stockcard" id="stockcard"></div>
+        </fieldset>
+
+        <fieldset><legend>Disposal</legend>
+          <div class="field-row">
+            <label class="field"><span>Method <span class="req">*</span></span><select id="d-method">
+              <option value="scrap">Scrap</option><option value="destroy">Destroy</option><option value="writeoff">Write-off</option>
+            </select></label>
+            <label class="field"><span>Quantity <span class="req">*</span></span><input id="d-qty" type="number" min="1" value="1"></label>
+            <label class="field" style="flex:2"><span>Reason <span class="req">*</span></span><select id="d-reason"></select></label>
+          </div>
+          <div id="d-preview" class="req-note"></div>
+          <label class="field" style="margin-top:10px"><span>Note (optional)</span><input id="d-note" placeholder="Free text for the audit trail…"></label>
+        </fieldset>
+
+        <div class="approve-bar">
+          <span class="req-note" id="submit-hint">Submitting raises a <b>pending</b> disposal — a <b>different user</b> must approve it.</span>
+          <span class="right">
+            <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+            <button class="btn btn-primary" id="submit-btn" onclick="submitDispose()">Submit for approval</button>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== REVIEW ===================== -->
+    <div id="view-review" style="display:none">
+      <div class="page-head"><h1 id="rev-title">Disposal</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Back</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Request</legend><div class="sum-grid" id="rev-summary"></div></fieldset>
+        <div class="review-box" id="rev-change"></div>
+        <div class="approve-bar" id="rev-actions"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+    const state = { site:'S-LYON', client:'all', method:'all', q:'', tab:'pending', assignee:'all' };
+    const METHOD_LABEL = { scrap:'Scrap', destroy:'Destroy', writeoff:'Write-off' };
+
+    function dspBadge(s){ const m={pending:'b-pending',posted:'b-posted',rejected:'b-rejected'};
+      return `<span class="badge ${m[s]||''}">${s==='posted'?'disposed':s}</span>`; }
+    // disposable = on-hand plate that is blocked OR past expiry
+    function disposable(site){ return onHandLpns(site).filter(l=> isBlocked(l.status) || isExpired(l)); }
+
+    /* ============================================================ LIST */
+    function dspList(){
+      const tabStatus = { pending:'pending', posted:'posted', rejected:'rejected' };
+      return DB.disposals.filter(d=>{
+        if (d.site!==state.site) return false;
+        if (state.tab!=='all' && d.status!==tabStatus[state.tab]) return false;
+        if (state.client!=='all' && d.client!==state.client) return false;
+        if (state.method!=='all' && d.method!==state.method) return false;
+        if (!assigneeFilterPass(d, state.assignee)) return false;
+        if (state.q){ const hay=`${d.id} ${d.lpn} ${prodName(d.product)} ${d.reason}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+        return true;
+      }).sort((a,b)=> (b.created||'').localeCompare(a.created||'') || b.id.localeCompare(a.id));
+    }
+    function renderTabs(){
+      const counts = k => DB.disposals.filter(d=>d.site===state.site && (k==='all'||d.status===k)).length;
+      const tabs=[['pending','Pending'],['posted','Posted'],['rejected','Rejected']];
+      $('tabs').innerHTML = tabs.map(([k,l])=>`<a href="#" class="${k===state.tab?'active':''}" onclick="setTab('${k}');return false">${l} <span class="muted">(${counts(k)})</span></a>`).join('');
+    }
+    function setTab(k){ state.tab=k; renderTabs(); renderList(); }
+
+    function renderList(){
+      const list = dspList();
+      $('rows').innerHTML = list.length ? list.map(d=>`<tr>
+        <td class="dots">⋮</td>
+        <td class="mono"><a href="#" onclick="openReview('${d.id}');return false">${d.id}</a></td>
+        <td>${esc(d.created||'—')}</td>
+        <td>${esc(prodName(d.product))}</td>
+        <td class="mono">${esc(d.lpn)}</td>
+        <td class="num">${d.qty}</td>
+        <td><span class="tag tag-warn">${esc(METHOD_LABEL[d.method]||d.method)}</span></td>
+        <td>${esc(d.reason||'—')}</td>
+        <td>${esc(d.by||'—')}</td>
+        <td>${dspBadge(d.status)}</td>
+        <td>${d.assignee ? `<span class="tag tag-rule" title="Dispatched to this person">${esc(assigneeName(d.assignee))}${isMine(d)?' · <b>me</b>':''}</span>` : '<span class="muted">Any</span>'}</td>
+        <td>${d.status==='pending'?`<a href="#" onclick="openReview('${d.id}');return false">Review ›</a>`:`<a href="#" onclick="openReview('${d.id}');return false">View</a>`}</td>
+      </tr>`).join('') : `<tr><td colspan="12" class="muted" style="padding:18px">No ${state.tab} disposals at ${dbName('sites',state.site)}.</td></tr>`;
+      const pend = DB.disposals.filter(d=>d.site===state.site && d.status==='pending').length;
+      $('list-summary').textContent = `${list.length} shown · ${pend} pending approval at ${dbName('sites',state.site)}`;
+    }
+
+    /* ============================================================ CREATE FORM */
+    function openNew(){ show('form'); $('s-site').value=state.site; fillLpns(); }
+    function curLpn(){ return lpnById($('s-lpn').value); }
+    function fillLpns(){
+      const site=$('s-site').value;
+      const list = disposable(site);
+      $('s-lpn').innerHTML = list.length
+        ? list.map(l=>`<option value="${l.id}">${l.id} — ${esc(prodName(l.product))} · ${l.qty} · ${esc(l.status)} @ ${esc(locName(l.loc))}</option>`).join('')
+        : `<option value="">— no blocked / expired stock at this site —</option>`;
+      renderStockcard();
+    }
+    function renderStockcard(){
+      const l=curLpn();
+      if(!l){ $('stockcard').innerHTML='<span class="muted">No disposable (blocked / expired) stock at this site.</span>'; $('submit-btn').disabled=true; return; }
+      $('submit-btn').disabled=false;
+      const p=DB.products.find(x=>x.id===l.product)||{}; const t=p.track||{};
+      const why = isExpired(l) ? 'expired' : 'blocked';
+      const bits=[['LPN',l.id],['Product',prodName(l.product)],['Client',dbName('clients',l.client)],
+        ['Location',locName(l.loc)],['On-hand',`${l.qty} ${esc(p.uom||'')}`],
+        ['Status',`${l.status} (${why})`]];
+      if(t.lot) bits.push(['Lot',l.lot||'—']);
+      if(t.expiry) bits.push(['Expiry',l.expiry||'—']);
+      if(t.serial) bits.push(['Serial',(l.serials&&l.serials[0])||'—']);
+      $('stockcard').innerHTML = `<div class="sum-grid">${bits.map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>`;
+      $('d-qty').value = l.qty; $('d-qty').max = l.qty;
+      fillReasons(); preview();
+    }
+    function fillReasons(){
+      const method=$('d-method').value;
+      $('d-reason').innerHTML = `<option value="">— select —</option>`+reasonsFor('dispose',method).concat('Other (see note)').map(r=>`<option>${esc(r)}</option>`).join('');
+    }
+    function preview(){
+      const l=curLpn(); if(!l){ $('d-preview').innerHTML=''; return; }
+      const q=Math.max(0,+$('d-qty').value||0);
+      const bad = q>l.qty;
+      const after = l.qty-q;
+      $('d-preview').innerHTML = bad
+        ? `<span class="tag tag-bad">Cannot dispose ${q} — only ${l.qty} on-hand</span>`
+        : `Removes <b>${q}</b> ${esc((DB.products.find(x=>x.id===l.product)||{}).uom||'')} on approval — plate left with <b>${after}</b>${after<=0?' (plate fully disposed)':''}.`;
+    }
+
+    function submitDispose(){
+      const l=curLpn(); if(!l){ alert('Select a blocked / expired stock plate.'); return; }
+      const method=$('d-method').value;
+      const q=Math.max(0,+$('d-qty').value||0); const reason=$('d-reason').value;
+      if (q<=0){ alert('Enter a quantity.'); return; }
+      if (q>l.qty){ alert(`Cannot dispose ${q} — only ${l.qty} on-hand.`); return; }
+      if (!reason){ alert('Select a reason.'); return; }
+      const d = disposeCreate({ lpn:l.id, qty:q, method, reason, note:$('d-note').value.trim(), by:currentUser() });
+      if (!d){ alert('Could not create disposal.'); return; }
+      banner(`<b>${d.id}</b> raised — <b>pending</b> approval. ${METHOD_LABEL[method]||method} of ${q} on ${esc(d.lpn)}. A different user must approve.`);
+      state.tab='pending'; renderTabs(); renderList(); show('list');
+    }
+
+    /* ============================================================ REVIEW + APPROVE (maker-checker) */
+    function openReview(id){
+      const d=DB.disposals.find(x=>x.id===id); if(!d) return;
+      $('rev-title').textContent = `Disposal ${d.id}`;
+      $('rev-summary').innerHTML = [
+        ['ID',d.id],['Method',METHOD_LABEL[d.method]||d.method],
+        ['Product',prodName(d.product)],['Plate',d.lpn],['Qty',d.qty],
+        ['Client',dbName('clients',d.client)],['Site',dbName('sites',d.site)],
+        ['Raised',d.created],['Raised by',d.by||'—'],['Reason',d.reason||'—'],['Status',d.status],
+        ...(d.approver?[['Approver',d.approver],['Posted',d.posted||'—']]:[]),
+      ].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+
+      const l=lpnById(d.lpn);
+      let chg = `<b>${METHOD_LABEL[d.method]||d.method}</b> — remove <b>${d.qty}</b> ${esc((DB.products.find(x=>x.id===d.product)||{}).uom||'')}`;
+      if (l) chg += ` <span class="muted">(plate on-hand ${l.qty}${(l.qty-d.qty)<=0?' → fully disposed':' → '+(l.qty-d.qty)})</span>`;
+      if (d.note) chg += `<div class="req-note" style="margin-top:10px">Note: ${esc(d.note)}</div>`;
+      // Dispatch: assignee picker (persists onto the disposal so the list + "My requests" reflect it).
+      chg += `<label class="field" style="margin-top:12px;max-width:280px"><span>Assignee <span class="muted">· dispatch to (optional)</span></span>`
+           + `<select onchange="assignDisposal('${d.id}', this.value)">${assigneePickerOptions(d.site||'', d.assignee)}</select></label>`;
+      $('rev-change').innerHTML = chg;
+
+      if (d.status==='pending'){
+        const blocked = sameActor(d.by);
+        $('rev-actions').innerHTML =
+          `<span class="req-note">This disposal is <b>not yet applied</b>. Approving removes the quantity from stock and logs the audit trail.</span>
+           <span class="right">
+             <span class="viewas">Acting as <b>${esc(currentUser())}</b></span>
+             <button class="btn btn-outline" onclick="reject('${d.id}')">Reject</button>
+             <button class="btn btn-primary" id="approve-btn" onclick="approve('${d.id}')"${blocked?' disabled':''}>Approve &amp; post</button>
+           </span>`
+          + (blocked?`<div class="mc-note" style="flex-basis:100%;margin-top:6px">✗ Maker-checker: <b>${esc(d.by)}</b> raised this — approval needs a different user. Switch the <b>View as</b> user (top-right of the list) to approve.</div>`:'');
+      } else {
+        $('rev-actions').innerHTML = `<span class="req-note">${d.status==='posted'?`Disposed ${esc(d.posted||d.created)} by ${esc(d.approver||'—')} — quantity removed from stock and logged to audit trail.`:`Rejected by ${esc(d.approver||'—')} — no change applied.`}</span>`;
+      }
+      show('review');
+    }
+    function assignDisposal(id, uid){ const d=DB.disposals.find(x=>x.id===id); if(d){ d.assignee=uid; renderList(); } }
+    function approve(id){
+      const d=DB.disposals.find(x=>x.id===id); if(!d||d.status!=='pending') return;
+      if (sameActor(d.by)){ alert('Maker-checker: a different user must approve this disposal. Switch the "View as" user.'); return; }
+      disposeApprove(id, currentUser());
+      banner(`<b>${d.id}</b> approved &amp; posted by ${esc(currentUser())} — ${d.qty} removed from ${esc(d.lpn)} and logged to audit trail.`);
+      state.tab='posted'; renderTabs(); renderList(); show('list');
+    }
+    function reject(id){
+      const d=DB.disposals.find(x=>x.id===id); if(!d||d.status!=='pending') return;
+      disposeReject(id, currentUser());
+      banner(`<b>${d.id}</b> rejected by ${esc(currentUser())} — no change applied to stock.`);
+      state.tab='rejected'; renderTabs(); renderList(); show('list');
+    }
+
+    /* ============================================================ view helpers */
+    function show(v){ ['list','form','review'].forEach(x=>$('view-'+x).style.display = x===v?'':'none'); window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ============================================================ init */
+    $('f-site').innerHTML   = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('s-site').innerHTML   = $('f-site').innerHTML;
+    $('f-client').innerHTML = `<option value="all">All clients</option>`+DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-assignee').innerHTML = assigneeFilterOptions('', state.assignee);
+    // "View as" — maker-checker actor switch (drives sameActor); match the "Name — Role" style of seed `by`/currentUser.
+    function userLabel(u){ return `${u.name} — ${u.role}`; }
+    (function fillViewAs(){
+      const cur = currentUser();
+      const opts = DB.users.filter(u=>u.status==='active').map(u=>{ const lbl=userLabel(u); return `<option value="${esc(lbl)}"${lbl===cur?' selected':''}>${esc(lbl)}</option>`; });
+      // ensure the current user (possibly a seed string not in the active list) is selectable
+      if (!DB.users.some(u=>userLabel(u)===cur)) opts.unshift(`<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
+      $('view-as').innerHTML = opts.join('');
+    })();
+    $('view-as').addEventListener('change', e=>{ setCurrentUser(e.target.value); renderList(); if($('view-review').style.display!=='none'){ const id=$('rev-title').textContent.replace('Disposal ','').trim(); openReview(id); } });
+
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; renderTabs(); renderList(); });
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; renderList(); });
+    $('f-method').addEventListener('change', e=>{ state.method=e.target.value; renderList(); });
+    $('f-assignee').addEventListener('change', e=>{ state.assignee=e.target.value; renderList(); });
+    $('f-q').addEventListener('input',       e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    $('s-site').addEventListener('change',   fillLpns);
+    $('s-lpn').addEventListener('change',    renderStockcard);
+    $('d-method').addEventListener('change', fillReasons);
+    $('d-qty').addEventListener('input',     preview);
+
+    renderTabs(); renderList();
+
+    /* ---- deep-link: ?lpn=<id> opens the New form pre-selected on that plate (from Stock Status ⋮ menu) ---- */
+    (function(){
+      const lpn = new URLSearchParams(location.search).get('lpn');
+      if (!lpn) return;
+      const l = lpnById(lpn);
+      if (!l || (l.qty||0)<=0) return;
+      state.site = l.site; $('f-site').value = l.site;
+      renderTabs(); renderList();
+      openNew();
+      $('s-site').value = l.site; fillLpns();
+      // only blocked/expired plates appear in the picker; select it if present
+      if ([...$('s-lpn').options].some(o=>o.value===lpn)){ $('s-lpn').value = lpn; renderStockcard(); }
+    })();
+  </script>
+</body></html>

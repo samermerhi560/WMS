@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transfers — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="inv-transfer" data-erp-title="Inventory Ops"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Inventory Ops › Transfers">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-info { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tag.tag-ok   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-bad  { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .badge.b-draft     { border-color:#9a9a9a; background:#f1f1f1; color:#555; }
+      .badge.b-intransit { border-color:#b08bc4; background:#f2e8f6; color:#5a2c6b; }
+      .badge.b-received  { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .badge.b-cancelled { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .route { font-weight:600; white-space:nowrap; } .route .arr { color:var(--ink-faint); margin:0 6px; }
+      table.ln { width:100%; border-collapse:collapse; margin:6px 0 12px; }
+      table.ln th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft);
+        border-bottom:1.5px solid var(--line); padding:6px 8px; white-space:nowrap; }
+      table.ln td { padding:7px 8px; border-bottom:1px solid var(--line-soft); font-size:13px; vertical-align:middle; }
+      table.ln .num { text-align:right; }
+      .act-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .act-bar .right { margin-left:auto; display:flex; gap:8px; }
+      .req-note { font-size:12px; color:var(--ink-soft); }
+      .pick-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+      .pick-row .field { margin-bottom:0; }
+      table.ln td input.qty { width:92px; text-align:right; }
+      table.ln td input.rqty { width:72px; text-align:right; }
+      table.ln td select.cond { min-width:108px; }
+      .ln-max { font-size:11px; color:var(--ink-faint); margin-left:6px; }
+      tr.cond-damaged td { background:#f6e7e7; } tr.cond-short td { background:#fbf3dd; }
+      .recv-line-note { font-size:11px; margin-top:3px; }
+      .recv-line-note.bad { color:#7a2c2c; } .recv-line-note.warn { color:#7a5a07; } .recv-line-note.ok { color:#235c25; }
+      /* searchable-select (.ss-*) styling now lives in wireframe.css; the engine is in erp-shell.js */
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Transfers</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts" id="list-acts"></div>
+      </div>
+      <p class="sub">Relocate stock. An <b>intra-site move</b> changes a plate's location within one site (immediate). An
+        <b>inter-site transfer</b> ships a plate from one site to another through an <b>in-transit</b> state —
+        ship out of the origin, receive into a location at the destination — preserving lot/expiry/serial genealogy.</p>
+
+      <div class="tabs" id="tabs"></div>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site</span><select id="f-site"></select></label>
+          <label class="field"><span>Since date <span class="req">*</span></span><input type="date" id="f-since"></label>
+          <label class="field"><span>Assignee</span><select id="f-assignee"></select></label>
+          <label class="field"><span>Product / LPN / ID</span><input id="f-q" placeholder="Search…"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead id="thead"></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== MOVE FORM ===================== -->
+    <div id="view-move" style="display:none">
+      <div class="page-head"><h1>New move <span class="muted" style="font-size:13px">· intra-site relocation</span></h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Plate to move</legend>
+          <div class="field-row">
+            <label class="field"><span>Site</span><select id="m-site"></select></label>
+            <label class="field" style="flex:2"><span>Plate (LPN) <span class="req">*</span></span><select id="m-lpn"></select></label>
+          </div>
+          <div class="sum-grid" id="m-card" style="margin-top:4px"></div>
+        </fieldset>
+        <fieldset><legend>Destination</legend>
+          <div class="field-row">
+            <label class="field" style="flex:2"><span>Destination location (same site) <span class="req">*</span></span><select id="m-dest"></select></label>
+            <label class="field"><span>Quantity to move <span class="req">*</span></span><input id="m-qty" type="number" min="1" inputmode="numeric"></label>
+            <label class="field" style="flex:2"><span>Note</span><input id="m-note" placeholder="Optional"></label>
+          </div>
+          <div class="req-note" id="m-preview"></div>
+          <div id="m-photos" style="margin-top:10px"></div>
+          <div id="m-notes" style="margin-top:10px"></div>
+        </fieldset>
+        <div class="act-bar">
+          <span class="req-note">A move is applied immediately and logged to the audit trail.</span>
+          <span class="right"><button class="btn btn-outline" onclick="show('list')">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmMove()">Confirm move</button></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== TRANSFER CREATE ===================== -->
+    <div id="view-tnew" style="display:none">
+      <div class="page-head"><h1>New transfer <span class="muted" style="font-size:13px">· inter-site</span></h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Route</legend>
+          <div class="field-row">
+            <label class="field"><span>Client</span><select id="t-client"></select></label>
+            <label class="field"><span>From site <span class="req">*</span></span><select id="t-from"></select></label>
+            <label class="field"><span>To site <span class="req">*</span></span><select id="t-to"></select></label>
+            <label class="field"><span>Assignee <span class="muted">· dispatch to (optional)</span></span><select id="t-assignee"></select></label>
+          </div>
+          <div id="t-photos" style="margin-top:10px"></div>
+          <div id="t-notes" style="margin-top:10px"></div>
+        </fieldset>
+        <fieldset><legend>Lines — full or partial plates</legend>
+          <div class="pick-row">
+            <label class="field" style="flex:3"><span>Add a plate available at the origin</span><select id="t-pick"></select></label>
+            <button class="btn btn-outline btn-sm" onclick="addLine()">Add line</button>
+          </div>
+          <table class="ln" id="t-lines"></table>
+          <div class="req-note" id="t-empty"></div>
+        </fieldset>
+        <div class="act-bar">
+          <span class="req-note">Saving creates a <b>draft</b> transfer. Ship it from the list to send the stock in transit.</span>
+          <span class="right"><button class="btn btn-outline" onclick="show('list')">Cancel</button>
+            <button class="btn btn-primary" id="t-save" onclick="saveTransfer()">Save draft</button></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== TRANSFER REVIEW ===================== -->
+    <div id="view-trev" style="display:none">
+      <div class="page-head"><h1 id="tr-title">Transfer</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Back</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Transfer</legend><div class="sum-grid" id="tr-summary"></div></fieldset>
+        <table class="ln" id="tr-lines"></table>
+        <div class="act-bar" id="tr-actions"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-16';
+
+    const SINCE_DEFAULT = '2026-05-17';   // 30 days before mock "today" (2026-06-16) — caps how far back history loads
+    const state = { tab:'moves', site:'all', q:'', since:SINCE_DEFAULT, assignee:'all' };   // land on Moves (intra-site) by default
+    let draftLines = [];     // create-transfer working lines
+    let draftTid = '';       // stable transfer id minted at create-time so photo refs survive into the saved order
+    // Completed transfer orders + all moves grow without bound → mandatory Since date.
+    // Active orders (draft / in-transit) always show regardless (must never lose sight of stock mid-flight).
+    const TRF_TERMINAL = s => s==='received' || s==='cancelled';
+
+    const tBadge = s => `<span class="badge b-${s.replace('-','')}">${s}</span>`;
+    const storageLocs = site => DB.locations.filter(l=>l.site===site && l.type==='storage' && l.status==='active');
+
+    /* ============================================================ TABS + LIST */
+    function renderTabs(){
+      const tt=[['moves','Moves (intra-site)'],['transfers','Transfer orders (inter-site)']];
+      $('tabs').innerHTML = tt.map(([k,l])=>{
+        const n = k==='transfers'?DB.transfers.length:DB.moves.length;
+        return `<a href="#" class="${k===state.tab?'active':''}" onclick="setTab('${k}');return false">${l} <span class="muted">(${n})</span></a>`;
+      }).join('');
+      // each tab owns exactly one create action — no buttons appearing/disappearing across tabs
+      $('list-acts').innerHTML = state.tab==='transfers'
+        ? `<button class="btn btn-primary" onclick="openTransfer()">+ New transfer</button>`
+        : `<button class="btn btn-primary" onclick="openMove()">+ New move</button>`;
+    }
+    function setTab(k){ state.tab=k; renderTabs(); renderList(); }
+
+    function matchSite(s){ return state.site==='all' || s===state.site; }
+    function renderList(){
+      if (!state.since){ $('rows').innerHTML=`<tr><td colspan="9" class="muted" style="padding:18px">Set a <b>Since date</b> above to load history (bounded for performance).</td></tr>`; $('list-summary').textContent=''; return; }
+      if (state.tab==='transfers'){
+        $('thead').innerHTML = `<tr><th style="width:28px">⚙</th><th>ID</th><th>Created</th><th>Route</th><th>Client</th>
+          <th class="num">Lines</th><th class="num">Qty</th><th>Status</th><th>Assignee</th><th></th></tr>`;
+        const list = DB.transfers.filter(t=>{
+          if (!(matchSite(t.fromSite)||matchSite(t.toSite))) return false;
+          if (TRF_TERMINAL(t.status) && (t.created||'') < state.since) return false;   // draft/in-transit always shown
+          if (!assigneeFilterPass(t, state.assignee)) return false;
+          if (state.q){ const hay=`${t.id} ${t.lines.map(l=>l.lpn+' '+prodName(l.product)).join(' ')}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+          return true;
+        }).sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+        $('rows').innerHTML = list.length ? list.map(t=>{
+          const qty=t.lines.reduce((s,l)=>s+(l.qty||0),0);
+          return `<tr><td class="dots">⋮</td>
+            <td class="mono"><a href="#" onclick="openTRev('${t.id}');return false">${t.id}</a></td>
+            <td>${esc(t.created)}</td>
+            <td><span class="route">${esc(dbName('sites',t.fromSite))}<span class="arr">→</span>${esc(dbName('sites',t.toSite))}</span></td>
+            <td>${esc(dbName('clients',t.client))}</td>
+            <td class="num">${t.lines.length}</td><td class="num">${qty}</td>
+            <td>${tBadge(t.status)}</td>
+            <td>${t.assignee ? `<span class="tag tag-info" title="Dispatched to this person">${esc(assigneeName(t.assignee))}${isMine(t)?' · <b>me</b>':''}</span>` : '<span class="muted">Any</span>'}</td>
+            <td><a href="#" onclick="openTRev('${t.id}');return false">${t.status==='draft'?'Ship ›':t.status==='in-transit'?'Receive ›':'View'}</a></td></tr>`;
+        }).join('') : `<tr><td colspan="10" class="muted" style="padding:18px">No transfer orders.</td></tr>`;
+        $('list-summary').textContent = `${list.length} transfer order(s) · ${DB.transfers.filter(t=>t.status==='in-transit').length} in transit`;
+      } else {
+        $('thead').innerHTML = `<tr><th style="width:28px">⚙</th><th>ID</th><th>Date</th><th>LPN</th><th>Product</th>
+          <th>From</th><th>To</th><th class="num">Qty</th><th>Status</th></tr>`;
+        const list = DB.moves.filter(m=>{
+          if (!matchSite(m.site)) return false;
+          if ((m.date||'') < state.since) return false;   // moves are all historical → fully gated by Since
+          if (state.q){ const hay=`${m.id} ${m.lpn} ${prodName(m.product)}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+          return true;
+        }).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+        $('rows').innerHTML = list.length ? list.map(m=>`<tr><td class="dots">⋮</td>
+          <td class="mono">${m.id}</td><td>${esc(m.date)}</td><td class="mono">${esc(m.lpn)}</td>
+          <td>${esc(prodName(m.product))}</td><td class="mono">${esc(locName(m.from))}</td>
+          <td class="mono">${esc(locName(m.to))}</td><td class="num">${m.qty}</td><td><span class="tag tag-info">done</span></td></tr>`).join('')
+          : `<tr><td colspan="9" class="muted" style="padding:18px">No moves recorded.</td></tr>`;
+        $('list-summary').textContent = `${list.length} move(s)`;
+      }
+    }
+
+    /* ============================================================ MOVE */
+    function openMove(){ show('move'); $('m-site').value = state.site==='all'?DB.sites[0].id:state.site; if($('m-site')._ssSync)$('m-site')._ssSync(); fillMoveLpns(); }
+    function fillMoveLpns(){
+      const site=$('m-site').value;
+      const list = onHandLpns(site).filter(l=>l.status!=='in-transit');
+      $('m-lpn').innerHTML = list.length ? list.map(l=>`<option value="${l.id}">${l.id} — ${esc(prodName(l.product))} · ${l.qty} @ ${esc(locName(l.loc))}</option>`).join('')
+        : `<option value="">— no movable stock at this site —</option>`;
+      fillMoveDest(); renderMoveCard();
+    }
+    function fillMoveDest(){
+      const l=lpnById($('m-lpn').value);
+      const site=$('m-site').value;
+      const dests = storageLocs(site).filter(loc=>!l || loc.id!==l.loc);
+      $('m-dest').innerHTML = dests.map(loc=>`<option value="${loc.id}">${esc(loc.structured)} ${loc.area?'· Area '+loc.area:''}${loc.userRef?' · '+esc(loc.userRef):''}</option>`).join('');
+      movePreview();
+    }
+    function renderMoveCard(){
+      const l=lpnById($('m-lpn').value);
+      if(!l){ $('m-card').innerHTML=''; $('m-photos').innerHTML=''; $('m-qty').value=''; $('m-qty').removeAttribute('max'); return; }
+      const p=DB.products.find(x=>x.id===l.product)||{};
+      $('m-card').innerHTML=[['LPN',l.id],['Product',prodName(l.product)],['On plate',`${l.qty} ${esc(p.uom||'')}`],
+        ['Current location',locName(l.loc)],['Status',l.status]]
+        .map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+      // optional condition evidence for the move, keyed to the plate (ref = LPN id)
+      $('m-photos').innerHTML = photoField({ ref:l.id, level:'header', title:'Condition evidence (optional)' });
+      $('m-notes').innerHTML = noteField({ ref:l.id, level:'header', title:'Condition note (optional)' });
+      $('m-qty').value=l.qty; $('m-qty').max=l.qty;   // default = whole plate
+    }
+    function movePreview(){
+      const l=lpnById($('m-lpn').value); const dest=$('m-dest').value;
+      if(!(l&&dest)){ $('m-preview').innerHTML=''; return; }
+      const qty=parseInt($('m-qty').value,10)||0;
+      const partial = qty>0 && qty<l.qty;
+      let note = `Move <b>${qty||l.qty}</b> of ${esc(l.id)} (${l.qty} on plate): `+
+        `<span class="mono">${esc(locName(l.loc))}</span> → <span class="mono">${esc(locName(dest))}</span>.`+
+        (partial?` <span class="tag tag-info">Partial — mints a new plate at the destination; ${l.qty-qty} stay${l.qty-qty===1?'s':''} on ${esc(l.id)}.</span>`:'');
+      // live guard feedback (hard-enforced again at confirm): freeze → segregation → capacity
+      const fz = frozenTakeFor(l.loc) || frozenTakeFor(dest);
+      const cap = binCapacityForAdd(dest, qty||l.qty, l.product);
+      if(fz)                              note += ` <span class="tag tag-bad">✗ frozen stock-take ${esc(fz.id)} — blocked</span>`;
+      else if(!binSegregationOk(dest,l.client)) note += ` <span class="tag tag-bad">✗ client–area segregation — blocked</span>`;
+      else if(!cap.ok)                    note += ` <span class="tag tag-bad">✗ over capacity: ${cap.fails.map(f=>f.after+'/'+f.limit+' '+f.dim).join(', ')}</span>`;
+      else                                note += ` <span class="tag tag-ok">fits — ${cap.after.units} units · ${cap.after.weight} kg · ${cap.after.lpns} slot(s)</span>`;
+      $('m-preview').innerHTML = note;
+    }
+    function confirmMove(){
+      const l=lpnById($('m-lpn').value); const dest=$('m-dest').value;
+      if(!l){ alert('Select a plate.'); return; }
+      if(!dest){ alert('Select a destination location.'); return; }
+      const qty=parseInt($('m-qty').value,10);
+      if(!(qty>0)){ alert('Enter a quantity to move.'); return; }
+      if(qty>l.qty){ alert(`Cannot move more than the plate holds (${l.qty}).`); return; }
+      const from=l.loc;
+      // FREEZE guard — refuse if the plate's current bin OR the destination is inside an active frozen stock-take.
+      const fz = frozenTakeFor(from) || frozenTakeFor(dest);
+      if(fz){ alert(`Blocked — a frozen stock-take (${fz.id}) covers this location. Moves touching a frozen scope are refused until it is posted or abandoned.`); return; }
+      // CAPACITY + SEGREGATION guard on the destination bin (same shared rules as Putaway / Returns restock).
+      if(!binSegregationOk(dest, l.client)){ alert(`Blocked — client–area segregation: ${dbName('clients',l.client)} may not be stored in ${locName(dest)}'s area.`); return; }
+      const cap = binCapacityForAdd(dest, qty, l.product);
+      if(!cap.ok){ alert(`Blocked — destination over capacity: `+cap.fails.map(f=>`${f.after}/${f.limit} ${f.dim}`).join(', ')+`.`); return; }
+      const whole=(qty===l.qty);
+      let movedId=l.id, note=$('m-note').value.trim();
+      if(whole){
+        l.loc=dest;                                   // whole plate relocates
+      } else {                                        // partial → split: source keeps remainder, child plate goes to dest
+        const child={ id:nextLpnId(), client:l.client, site:l.site, product:l.product, qty,
+          lot:l.lot||'', expiry:l.expiry||'', serials:(l.serials||[]).slice(), status:l.status, loc:dest };
+        l.qty-=qty; DB.lpns.push(child); movedId=child.id;
+        note=(note?note+' · ':'')+`split ${qty} from ${l.id} (${l.qty} left)`;
+      }
+      const mv={ id:nextId('MOV',DB.moves,6000), site:l.site, lpn:movedId, product:l.product, qty,
+        from, to:dest, status:'done', date:TODAY, by:'Samer Merhi', note };
+      DB.moves.push(mv);
+      logTxn({ type:'move', lpn:movedId, product:l.product, qty, from, to:dest, site:l.site, user:'Samer Merhi', ref:mv.id, note:`Move ${locName(from)}→${locName(dest)}${whole?'':' (split)'}` });
+      state.tab='moves'; renderTabs();
+      banner(`<b>${mv.id}</b> — ${qty} of ${esc(l.id)} moved to <span class="mono">${esc(locName(dest))}</span>${whole?'':` (new plate <b>${esc(movedId)}</b>)`}.`);
+      renderList(); show('list');
+    }
+
+    /* ============================================================ TRANSFER CREATE */
+    function openTransfer(){
+      draftLines=[]; draftTid=nextId('TRF',DB.transfers,8000); show('tnew');
+      $('t-client').innerHTML=`<option value="">— any —</option>`+DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+      $('t-from').innerHTML=DB.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+      $('t-assignee').innerHTML = assigneePickerOptions($('t-from').value, '');
+      // header-level transfer-order evidence, keyed to the stable draft transfer id
+      $('t-photos').innerHTML = photoField({ ref:draftTid, level:'header', title:'Transfer evidence (optional)' });
+      $('t-notes').innerHTML = noteField({ ref:draftTid, level:'header', title:'Transfer notes (optional)' });
+      fillToSites(); fillPick(); renderDraftLines();
+    }
+    function fillToSites(){
+      const from=$('t-from').value;
+      $('t-to').innerHTML=DB.sites.filter(s=>s.id!==from).map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    }
+    function pickCandidates(){
+      const from=$('t-from').value, client=$('t-client').value;
+      return DB.lpns.filter(l=>l.site===from && l.status==='available' && (!client||l.client===client) && !draftLines.find(d=>d.lpn===l.id));
+    }
+    function fillPick(){
+      const list=pickCandidates();
+      $('t-pick').innerHTML = list.length? list.map(l=>`<option value="${l.id}">${l.id} — ${esc(prodName(l.product))} · ${l.qty} @ ${esc(locName(l.loc))}</option>`).join('')
+        : `<option value="">— no available plates at the origin —</option>`;
+    }
+    function addLine(){
+      const l=lpnById($('t-pick').value); if(!l) return;
+      // F3 — orphan-allocation guard: transferring a plate reserved on open order(s) would orphan them.
+      const res=ordersReserving(l.id);
+      if (res.length){
+        const detail=res.map(r=>`  • ${r.order} (${r.qty})`).join('\n');
+        if (!confirm(`${l.id} is reserved on open order(s):\n\n${detail}\n\nTransferring it out of ${dbName('sites',$('t-from').value)} would orphan those allocation(s) — they must be re-allocated. Add it anyway?`)) return;
+      }
+      draftLines.push({ lpn:l.id, product:l.product, qty:l.qty, max:l.qty, lot:l.lot||'', expiry:l.expiry||'', serials:l.serials||[], recvLoc:'' });
+      fillPick(); renderDraftLines();
+    }
+    function rmLine(i){ draftLines.splice(i,1); fillPick(); renderDraftLines(); }
+    function setLineQty(i,v){
+      const d=draftLines[i]; if(!d) return;
+      let q=parseInt(v,10); if(!(q>0)) q=1; if(q>d.max) q=d.max;
+      d.qty=q; renderDraftLines();
+    }
+    function renderDraftLines(){
+      if(!draftLines.length){ $('t-lines').innerHTML=''; $('t-empty').textContent='No lines yet — add at least one plate.'; $('t-save').disabled=true; return; }
+      $('t-empty').textContent=''; $('t-save').disabled=false;
+      $('t-lines').innerHTML=`<thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th>Expiry</th><th class="num">Qty to transfer</th><th>Photos</th><th>Notes</th><th></th></tr></thead><tbody>`+
+        draftLines.map((d,i)=>`<tr><td class="mono">${d.lpn}</td><td>${esc(prodName(d.product))}</td>
+          <td class="mono">${esc(d.lot||'—')}</td><td>${esc(d.expiry||'—')}</td>
+          <td class="num"><input class="qty" type="number" min="1" max="${d.max}" value="${d.qty}" onchange="setLineQty(${i},this.value)"><span class="ln-max">/ ${d.max}</span>${d.qty<d.max?'<div class="ln-max" style="color:#2c4a6b">splits — '+(d.max-d.qty)+' stays</div>':''}</td>
+          <td>${photoField({ ref:`${draftTid}:L${i}`, level:'line', title:'Condition' })}</td>
+          <td>${noteField({ ref:`${draftTid}:L${i}`, level:'line', title:'Condition' })}</td>
+          <td><a href="#" onclick="rmLine(${i});return false">remove</a></td></tr>`).join('')+`</tbody>`;
+    }
+    function saveTransfer(){
+      if(!draftLines.length){ alert('Add at least one plate.'); return; }
+      const from=$('t-from').value, to=$('t-to').value;
+      if(from===to){ alert('Origin and destination must differ.'); return; }
+      const t={ id:draftTid||nextId('TRF',DB.transfers,8000), client:$('t-client').value||draftLines[0]&&lpnById(draftLines[0].lpn).client,
+        fromSite:from, toSite:to, status:'draft', created:TODAY, shipped:'', received:'', by:'Benjamin Felix',
+        assignee:($('t-assignee')?$('t-assignee').value:'') , lines:draftLines.map(d=>({...d})) };
+      DB.transfers.push(t);
+      state.tab='transfers'; renderTabs(); banner(`<b>${t.id}</b> created (draft) — ${esc(dbName('sites',from))} → ${esc(dbName('sites',to))}, ${t.lines.length} plate(s). Open it to ship.`);
+      renderList(); show('list');
+    }
+
+    /* ============================================================ TRANSFER REVIEW / SHIP / RECEIVE */
+    let trevId='';   // transfer currently open in the review/receive screen (so per-line handlers can find it)
+    function openTRev(id){
+      const t=DB.transfers.find(x=>x.id===id); if(!t) return;
+      trevId=id;
+      $('tr-title').textContent=`Transfer ${t.id}`;
+      const trEditable = t.status==='draft' || t.status==='in-transit';   // can still re-dispatch an active transfer
+      $('tr-summary').innerHTML=[['ID',t.id],['Route',`${dbName('sites',t.fromSite)} → ${dbName('sites',t.toSite)}`],
+        ['Client',dbName('clients',t.client)],['Created',t.created],['Shipped',t.shipped||'—'],['Received',t.received||'—'],
+        ['Status',t.status],['Plates',t.lines.length]].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')
+        + `<div><div class="k">Assignee · dispatch to</div><div class="v">${trEditable
+            ? `<select id="tr-assignee" onchange="assignTransfer('${t.id}',this.value)" style="max-width:200px">${assigneePickerOptions(t.fromSite, t.assignee)}</select>`
+            : (t.assignee ? esc(assigneeName(t.assignee))+(isMine(t)?' · me':'') : 'Any')}</div></div>`;
+
+      const needDest = t.status==='in-transit';
+      const photoRO = t.status==='received' || t.status==='cancelled';   // terminal orders view-only
+      const qLoc = quarantineLocFor(t.toSite);   // F7 — damaged goods land here (blocked) at the destination
+      $('tr-lines').innerHTML=`<thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th>Expiry</th><th class="num">${needDest?'Shipped':'Qty'}</th>
+        ${needDest?'<th class="num">Received</th><th>Condition</th><th>Receive into</th>':'<th>Status</th>'}<th>Photos</th><th>Notes</th></tr></thead><tbody>`+
+        t.lines.map((l,i)=>`<tr id="rrow-${i}"><td class="mono">${l.lpn}</td><td>${esc(prodName(l.product))}</td>
+          <td class="mono">${esc(l.lot||'—')}</td><td>${esc(l.expiry||'—')}</td><td class="num">${l.qty}</td>
+          ${needDest?`<td class="num"><input class="rqty" id="rq-${i}" type="number" min="0" max="${l.qty}" value="${l.qty}" oninput="recvLineUpdate(${i})"></td>
+            <td><select class="cond" id="rc-${i}" onchange="recvLineUpdate(${i})">
+              <option value="good">Good</option><option value="damaged">Damaged</option><option value="short">Short</option></select></td>
+            <td><select id="rl-${i}">${storageLocs(t.toSite).map(loc=>`<option value="${loc.id}">${esc(loc.structured)}${loc.area?' · Area '+loc.area:''}</option>`).join('')}</select>
+              <div class="recv-line-note" id="rnote-${i}"></div></td>`
+                   :`<td>${(lpnById(l.lpn)||{}).status||'—'}</td>`}
+          <td>${photoField({ ref:`${t.id}:L${i}`, level:'line', title:'Condition', readonly:photoRO })}</td>
+          <td>${noteField({ ref:`${t.id}:L${i}`, level:'line', title:'Condition', readonly:photoRO })}</td></tr>`).join('')+`</tbody>`;
+      enhanceSelects($('tr-lines'));   // make per-line destination pickers type-to-filter
+      if (needDest){ t.lines.forEach((l,i)=>recvLineUpdate(i)); if(!qLoc) /* no quarantine bin → Damaged unavailable note shown per-line */ {} }
+
+      $('tr-actions').innerHTML =
+        t.status==='draft' ? `<span class="req-note">Shipping sends ${t.lines.length} plate(s) <b>in transit</b> (removed from ${esc(dbName('sites',t.fromSite))}).</span>
+          <span class="right"><button class="btn btn-outline" onclick="cancelT('${t.id}')">Cancel transfer</button>
+          <button class="btn btn-primary" onclick="shipT('${t.id}')">Ship ▸</button></span>`
+      : t.status==='in-transit' ? `<span class="req-note">Receive each plate — set the <b>condition</b> (Good · Damaged → quarantine · Short → write off the shortfall) and the destination bin. Capacity, segregation &amp; freeze are checked.</span>
+          <span class="right"><button class="btn btn-outline" onclick="abandonT('${t.id}')">Write off / abandon ▸</button>
+          <button class="btn btn-primary" onclick="receiveT('${t.id}')">Receive ▸</button></span>`
+      : `<span class="req-note">${t.status==='received'?`Received ${esc(t.received)} — stock available at ${esc(dbName('sites',t.toSite))}.`:'Cancelled — no stock moved.'}</span>`;
+      show('trev');
+    }
+    function shipT(id){
+      const t=DB.transfers.find(x=>x.id===id); if(!t||t.status!=='draft') return;
+      // FREEZE guard — a plate sitting inside an active frozen stock-take cannot ship until the take is unfrozen.
+      for(const l of t.lines){ const src=lpnById(l.lpn); const fz=src&&frozenTakeFor(src.loc);
+        if(fz){ alert(`Blocked — ${src.id} is in a frozen stock-take (${fz.id}) at ${dbName('sites',t.fromSite)}. Ship is refused until it is posted or abandoned.`); return; } }
+      // F3 — orphan-allocation guard: shipping plates reserved on open order(s) takes them out of the origin.
+      const orphan=t.lines.map(l=>({lpn:l.lpn,orders:ordersReserving(l.lpn)})).filter(h=>h.orders.length);
+      if(orphan.length){
+        const detail=orphan.map(h=>`  • ${h.lpn} → ${h.orders.map(r=>r.order+' ('+r.qty+')').join(', ')}`).join('\n');
+        if(!confirm(`${orphan.length} plate(s) on this transfer are reserved on open order(s):\n\n${detail}\n\nShipping them orphans those reservations — the order(s) must be re-allocated. Ship anyway?`)) return;
+      }
+      let splits=0;
+      t.lines.forEach(l=>{ const src=lpnById(l.lpn); if(!src) return;
+        if((l.qty||0) < src.qty){                      // partial → split a child plate to ship, leave remainder at origin
+          const child={ id:nextLpnId(), client:src.client, site:src.site, product:src.product, qty:l.qty,
+            lot:src.lot||'', expiry:src.expiry||'', serials:(src.serials||[]).slice(), status:'in-transit', loc:src.loc };
+          src.qty-=l.qty; DB.lpns.push(child); l.lpn=child.id; splits++;
+          logTxn({type:'transfer-ship',lpn:child.id,product:child.product,qty:l.qty,from:t.fromSite,to:t.toSite,site:t.fromSite,user:'Benjamin Felix',ref:t.id,note:`Shipped (split ${l.qty} from ${src.id}) ${dbName('sites',t.fromSite)}→${dbName('sites',t.toSite)}`});
+        } else {                                        // whole plate ships
+          src.status='in-transit';
+          logTxn({type:'transfer-ship',lpn:src.id,product:src.product,qty:l.qty,from:t.fromSite,to:t.toSite,site:t.fromSite,user:'Benjamin Felix',ref:t.id,note:`Shipped ${dbName('sites',t.fromSite)}→${dbName('sites',t.toSite)}`});
+        }
+      });
+      t.status='in-transit'; t.shipped=TODAY;
+      banner(`<b>${t.id}</b> shipped — ${t.lines.length} plate(s) now in transit to ${esc(dbName('sites',t.toSite))}${splits?` (${splits} split from a larger plate)`:''}.`);
+      renderList(); show('list');
+    }
+    // F7 — per-line read of the receive controls: shipped qty, condition, entered received qty, shortfall, dest bin.
+    function recvLineState(t,i){
+      const l=t.lines[i]; const cond=($('rc-'+i)||{}).value||'good';
+      const shipped=l.qty||0;
+      let recv=parseInt(($('rq-'+i)||{}).value,10); if(isNaN(recv)) recv=shipped;
+      recv=Math.max(0,Math.min(recv,shipped));
+      const qLoc=quarantineLocFor(t.toSite);
+      // 'good' → all to chosen bin; 'damaged' → all to quarantine (blocked); 'short' → recv good + shortfall written off.
+      let goodQty=recv, shortfall=0, dest=($('rl-'+i)||{}).value;
+      if(cond==='good'){ goodQty=shipped; recv=shipped; }
+      else if(cond==='damaged'){ goodQty=shipped; recv=shipped; dest=qLoc; }
+      else { goodQty=recv; shortfall=shipped-recv; }
+      return { l, cond, shipped, recv, goodQty, shortfall, dest, qLoc };
+    }
+    // F7 — live per-line feedback + gray the bin picker when a condition routes elsewhere (damaged→quarantine).
+    function recvLineUpdate(i){
+      const t=DB.transfers.find(x=>x.id===trevId); if(!t) return;
+      const s=recvLineState(t,i); const row=$('rrow-'+i), note=$('rnote-'+i), binSel=$('rl-'+i), qty=$('rq-'+i);
+      if(row){ row.className=''; if(s.cond==='damaged') row.classList.add('cond-damaged'); else if(s.cond==='short') row.classList.add('cond-short'); }
+      if(qty) qty.disabled = (s.cond==='good');                  // good takes the whole shipped qty
+      if(binSel){ const wrap=binSel.closest('.ss-wrap'); const off=(s.cond==='damaged'); binSel.disabled=off; if(wrap) wrap.style.opacity=off?'.5':''; }
+      if(!note) return;
+      if(s.cond==='good'){ note.className='recv-line-note ok'; note.textContent=`All ${s.shipped} received good.`; }
+      else if(s.cond==='damaged'){ note.className='recv-line-note bad';
+        note.textContent = s.qLoc ? `All ${s.shipped} → quarantine (${locName(s.qLoc)}) as damaged.` : `No quarantine bin at destination — cannot route damaged stock.`; }
+      else { note.className='recv-line-note warn'; note.textContent = s.shortfall>0
+        ? `${s.recv} received · ${s.shortfall} short → written off as lost.` : `Enter the qty actually received (less than ${s.shipped}).`; }
+    }
+    function receiveT(id){
+      const t=DB.transfers.find(x=>x.id===id); if(!t||t.status!=='in-transit') return;
+      // Validate every receive destination at COMMIT time: not frozen, segregation OK, capacity OK (same shared rules as Putaway).
+      for(let i=0;i<t.lines.length;i++){
+        const s=recvLineState(t,i);
+        if(s.cond==='short' && !(s.recv>0)){ alert(`Line ${i+1}: a Short receipt must still receive at least 1 unit. Use the Write off / abandon action to discard the whole plate.`); return; }
+        if(s.cond==='damaged' && !s.dest){ alert(`Blocked — no quarantine bin at ${dbName('sites',t.toSite)} to route the damaged plate on line ${i+1}.`); return; }
+        const dest=s.dest; if(!dest) continue;
+        const fz=frozenTakeFor(dest);
+        if(fz){ alert(`Blocked — receive location for line ${i+1} (${locName(dest)}) is inside a frozen stock-take (${fz.id}). Choose a bin outside the frozen scope.`); return; }
+        if(!binSegregationOk(dest, t.client)){ alert(`Blocked — client–area segregation: line ${i+1} cannot be received into ${locName(dest)}'s area.`); return; }
+        const cap=binCapacityForAdd(dest, s.goodQty, s.l.product);
+        if(!cap.ok){ alert(`Blocked — line ${i+1} over capacity at ${locName(dest)}: `+cap.fails.map(f=>`${f.after}/${f.limit} ${f.dim}`).join(', ')+`.`); return; }
+      }
+      let damaged=0, shortUnits=0;
+      t.lines.forEach((l,i)=>{ const s=recvLineState(t,i); const lp=lpnById(l.lpn); if(!lp) return;
+        if(s.cond==='damaged'){
+          lp.site=t.toSite; lp.loc=s.dest; lp.status='damaged'; lp.qty=s.goodQty; l.recvLoc=s.dest; l.condition='damaged'; damaged++;
+          logTxn({type:'transfer-receive',lpn:lp.id,product:lp.product,qty:s.goodQty,from:t.fromSite,to:s.dest,site:t.toSite,user:'Nicolas Masserey',ref:t.id,note:`Received DAMAGED at ${dbName('sites',t.toSite)} ${locName(s.dest)} → quarantine`});
+        } else if(s.cond==='short'){
+          lp.site=t.toSite; lp.loc=s.dest; lp.status='available'; lp.qty=s.goodQty; l.recvLoc=s.dest; l.condition='short'; shortUnits+=s.shortfall;
+          logTxn({type:'transfer-receive',lpn:lp.id,product:lp.product,qty:s.goodQty,from:t.fromSite,to:s.dest,site:t.toSite,user:'Nicolas Masserey',ref:t.id,note:`Received ${s.goodQty} at ${dbName('sites',t.toSite)} ${locName(s.dest)} (short ${s.shortfall})`});
+          // shortfall → child remainder plate written off as lost
+          const lost={ id:nextLpnId(), client:lp.client, site:t.toSite, product:lp.product, qty:s.shortfall,
+            lot:lp.lot||'', expiry:lp.expiry||'', serials:[], status:'lost', loc:s.dest };
+          DB.lpns.push(lost);
+          logTxn({type:'transfer-loss',lpn:lost.id,product:lost.product,qty:s.shortfall,from:t.fromSite,to:t.toSite,site:t.toSite,user:'Nicolas Masserey',ref:t.id,note:`In-transit short — ${s.shortfall} lost vs ${lp.id} (shipped ${s.shipped}, received ${s.goodQty})`});
+        } else {
+          lp.site=t.toSite; lp.loc=s.dest; lp.status='available'; l.recvLoc=s.dest; l.condition='good';
+          logTxn({type:'transfer-receive',lpn:lp.id,product:lp.product,qty:l.qty,from:t.fromSite,to:s.dest,site:t.toSite,user:'Nicolas Masserey',ref:t.id,note:`Received at ${dbName('sites',t.toSite)} ${locName(s.dest)}`});
+        } });
+      t.status='received'; t.received=TODAY;
+      banner(`<b>${t.id}</b> received at ${esc(dbName('sites',t.toSite))} — ${t.lines.length} plate(s)${damaged?` · ${damaged} to quarantine (damaged)`:''}${shortUnits?` · ${shortUnits} unit(s) written off (short)`:''}.`);
+      renderList(); show('list');
+    }
+    // F7 — write off / abandon an in-transit transfer: every plate becomes lost (qty 0), the order is cancelled.
+    function abandonT(id){
+      const t=DB.transfers.find(x=>x.id===id); if(!t||t.status!=='in-transit') return;
+      const reason=prompt(`Write off / abandon ${t.id}?\nEvery in-transit plate is marked LOST (qty 0) and the transfer is cancelled.\n\nReason (required):`,'');
+      if(reason==null) return;
+      if(!reason.trim()){ alert('A reason is required to write off an in-transit transfer.'); return; }
+      t.lines.forEach(l=>{ const lp=lpnById(l.lpn); if(!lp) return; const wasQty=lp.qty;
+        lp.status='lost'; lp.qty=0; l.condition='lost';
+        logTxn({type:'transfer-loss',lpn:lp.id,product:lp.product,qty:wasQty,from:t.fromSite,to:t.toSite,site:t.toSite,user:'Nicolas Masserey',ref:t.id,note:`In-transit write-off (${wasQty} lost) · ${reason.trim()}`}); });
+      t.status='cancelled';
+      logTxn({type:'transfer-cancel',lpn:t.lines.map(l=>l.lpn).join(','),product:t.lines[0]&&t.lines[0].product,qty:0,from:t.fromSite,to:t.toSite,site:t.fromSite,user:'Nicolas Masserey',ref:t.id,note:`Transfer abandoned in transit · ${reason.trim()}`});
+      banner(`<b>${t.id}</b> written off — ${t.lines.length} plate(s) marked lost, transfer cancelled. Reason: ${esc(reason.trim())}.`);
+      renderList(); show('list');
+    }
+    function cancelT(id){ const t=DB.transfers.find(x=>x.id===id); if(!t||t.status!=='draft') return;
+      t.status='cancelled'; banner(`<b>${t.id}</b> cancelled.`); renderList(); show('list'); }
+
+    /* ============================================================ shared */
+    // Dispatch a transfer to a person (or clear it) from the review view; persists onto the live record.
+    function assignTransfer(id, uid){ const t=DB.transfers.find(x=>x.id===id); if(t){ t.assignee=uid; renderList(); } }
+    function nextId(prefix, coll, base){ let n=base; coll.forEach(x=>{ const m=new RegExp(prefix+'-(\\d+)').exec(x.id); if(m) n=Math.max(n,+m[1]); }); return prefix+'-'+(n+1); }
+    function show(v){ ['list','move','tnew','trev'].forEach(x=>$('view-'+x).style.display=x===v?'':'none'); window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ============================================================ init */
+    $('f-site').innerHTML=`<option value="all">All sites</option>`+DB.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('f-assignee').innerHTML = assigneeFilterOptions('', state.assignee);
+    $('m-site').innerHTML=DB.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('f-site').addEventListener('change',e=>{ state.site=e.target.value; renderList(); });
+    $('f-assignee').addEventListener('change',e=>{ state.assignee=e.target.value; renderList(); });
+    $('f-since').value = SINCE_DEFAULT;
+    $('f-since').addEventListener('change',e=>{ state.since=e.target.value; renderList(); });
+    $('f-q').addEventListener('input',e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    $('m-site').addEventListener('change',fillMoveLpns);
+    $('m-lpn').addEventListener('change',()=>{ renderMoveCard(); fillMoveDest(); });
+    $('m-dest').addEventListener('change',movePreview);
+    $('m-qty').addEventListener('input',movePreview);
+    $('t-from').addEventListener('change',()=>{ fillToSites(); $('t-assignee').innerHTML=assigneePickerOptions($('t-from').value,''); draftLines=[]; fillPick(); renderDraftLines(); });
+    $('t-client').addEventListener('change',()=>{ draftLines=[]; fillPick(); renderDraftLines(); });
+
+    renderTabs(); renderList();
+    // searchable dropdowns are applied globally by erp-shell.js (auto-enhances .erp-main + future selects)
+
+    /* ---- deep-link hand-off: ?lpn=<id> opens the Move form pre-loaded on that plate
+            (from the Stock Status ⋮ menu — mirrors the ?asn=/?out= pattern) ---- */
+    (function(){
+      const lpn = new URLSearchParams(location.search).get('lpn');
+      if (!lpn) return;
+      const l = lpnById(lpn);
+      if (!l || l.status==='in-transit' || (l.qty||0)<=0) return;   // can't move stock already in transit
+      state.tab = 'moves'; renderTabs();
+      state.site = l.site;                            // openMove targets state.site (not 'all')
+      openMove();                                     // sets m-site + fills movable plates
+      $('m-lpn').value = lpn; if($('m-lpn')._ssSync)$('m-lpn')._ssSync();
+      renderMoveCard(); fillMoveDest();
+    })();
+  </script>
+</body></html>

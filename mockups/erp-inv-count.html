@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Count Approval — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="inv-count" data-erp-title="Inventory Ops"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Inventory Ops › Count Approval">
+  <div id="page-content">
+
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+      .badge.b-pendingapproval { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .badge.b-approved  { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .badge.b-rejected  { border-color:#9a9a9a; background:#eee; color:#555; }
+      .var-pos { color:#235c25; font-weight:700; }
+      .var-neg { color:#b03030; font-weight:700; }
+      .var-zero{ color:var(--ink-faint); }
+      .var-gross{ color:#7a5a07; font-weight:700; }   /* gross |Δ| — magnitude of discrepancy regardless of sign */
+      table.ln { width:100%; border-collapse:collapse; margin:6px 0 12px; }
+      table.ln th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft);
+        border-bottom:1.5px solid var(--line); padding:6px 8px; white-space:nowrap; }
+      table.ln td { padding:7px 8px; border-bottom:1px solid var(--line-soft); font-size:13px; }
+      table.ln .num { text-align:right; }
+      table.ln tr.grp td { background:var(--fill); font-weight:600; border-bottom:1.5px solid var(--line); }
+      .act-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .act-bar .right { margin-left:auto; display:flex; gap:8px; }
+      .req-note { font-size:12px; color:var(--ink-soft); }
+      .pick-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+      .pick-row .field { margin-bottom:0; }
+      .viewas { display:flex; align-items:center; gap:6px; font-size:11px; text-transform:uppercase;
+        letter-spacing:.04em; color:var(--ink-soft); }
+      .viewas select { width:auto; min-width:140px; text-transform:none; letter-spacing:normal; font-size:13px; }
+      .mk-note { font-size:12.5px; padding:8px 12px; border-radius:var(--radius);
+        border:1px solid #caa24a; background:#fbf3dd; color:#7a5a07; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+      <div class="page-head"><h1>Count Approval</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts">
+          <label class="viewas" title="Maker-checker demo — switch the signed-in approver">View as
+            <select id="view-as" onchange="setUser(this.value)"></select></label>
+          <button class="btn btn-primary" onclick="openNew()">+ New count</button>
+        </div>
+      </div>
+      <p class="sub">Cycle-count <b>sheets</b> counted on the floor (PWA) or keyed here — one sheet can span <b>many bins</b>.
+        The system computes the <b>variance</b> between counted and system quantity per plate; a supervisor <b>approves</b> to
+        correct stock to the counted figure, or <b>rejects</b> to leave it unchanged and trigger a recount. Approvals post to the audit trail.</p>
+
+      <div class="tabs" id="tabs"></div>
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site</span><select id="f-site"></select></label>
+          <label class="field" id="f-since-wrap"><span>Since date <span class="req">*</span></span><input type="date" id="f-since"></label>
+          <label class="field"><span>Assignee</span><select id="f-assignee"></select></label>
+          <label class="field"><span>Location / ID</span><input id="f-q" placeholder="Search…"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div id="bulkbar" style="display:none;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 8px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--brand-tint2)">
+        <label style="font-size:13px;white-space:nowrap">Auto-approve tolerance: ± <input type="number" id="tol" min="0" value="0" style="width:60px;text-align:right"> units</label>
+        <span class="req-note" style="max-width:560px">Sheets whose largest plate variance is within tolerance can be bulk-approved; larger variances are flagged <b>⚠ review</b> and must be opened individually.</span>
+        <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <span id="selinfo" class="muted"></span>
+          <button class="btn btn-outline btn-sm" id="bulk-reject" onclick="rejectSelected()" disabled>Reject selected</button>
+          <button class="btn btn-primary btn-sm" id="bulk-approve" onclick="approveSelected()" disabled>Approve selected</button>
+        </span>
+      </div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead id="thead"></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== DETAIL ===================== -->
+    <div id="view-detail" style="display:none">
+      <div class="page-head"><h1 id="d-title">Count sheet</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Back</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to count list</a></div>
+      <div class="panel">
+        <fieldset><legend>Count sheet</legend><div class="sum-grid" id="d-summary"></div></fieldset>
+        <table class="ln" id="d-lines"></table>
+        <div class="act-bar" id="d-actions"></div>
+      </div>
+    </div>
+
+    <!-- ===================== CREATE — count sheet (1..N locations) ===================== -->
+    <div id="view-form" style="display:none">
+      <div class="page-head"><h1>New count sheet <span class="muted" style="font-size:13px">· count one or many locations in one pass</span></h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to count list</a></div>
+      <div class="panel">
+        <fieldset><legend>Count sheet</legend>
+          <div class="field-row">
+            <label class="field"><span>Site</span><select id="n-site"></select></label>
+            <label class="field"><span>Counted by</span><input id="n-by" value="Samer Merhi"></label>
+            <label class="field"><span>Assignee <span class="muted">· dispatch to (optional)</span></span><select id="n-assignee"></select></label>
+            <label class="field" style="flex:0 0 auto"><span>Blind count</span>
+              <span style="display:flex;align-items:center;gap:6px;height:32px"><input type="checkbox" id="w-blind" onchange="toggleBlind()" style="width:auto;margin:0"> hide system qty</span></label>
+          </div>
+        </fieldset>
+        <fieldset><legend>Add locations</legend>
+          <div class="pick-row">
+            <label class="field" style="flex:2"><span>Location</span><select id="n-loc"></select></label>
+            <button class="btn btn-outline btn-sm" onclick="addLoc()">+ Add location</button>
+            <span style="flex:1 0 18px"></span>
+            <label class="field"><span>Area</span><select id="w-area"></select></label>
+            <button class="btn btn-outline btn-sm" onclick="addArea()">+ Add all bins in Area</button>
+          </div>
+          <p class="req-note">Add bins one at a time, or drop in a whole <b>Area</b> at once. Each adds its known plates as rows below.</p>
+        </fieldset>
+        <fieldset><legend>Worksheet</legend>
+          <div class="req-note" id="w-summary" style="margin-bottom:6px"></div>
+          <p class="req-note">Key the physical count per plate — press <b>Enter</b> to jump to the next. Default = system qty; set <b>0</b> for a missing plate.</p>
+          <table class="ln" id="w-table"><thead id="w-thead"></thead><tbody id="w-body"></tbody></table>
+          <div class="req-note" id="w-empty"></div>
+        </fieldset>
+        <div class="act-bar">
+          <span class="req-note">Submitting creates one <b>pending-approval</b> count sheet — a supervisor approves to correct stock across all its locations.</span>
+          <span class="right"><button class="btn btn-outline" onclick="show('list')">Cancel</button>
+          <button class="btn btn-primary" id="w-save" onclick="saveSheet()">Submit count sheet</button></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-16';
+    const SINCE_DEFAULT = '2026-05-17';   // 30 days before mock "today" (2026-06-16) — caps how far back history loads
+    const state = { site:'S-LYON', q:'', tab:'pending-approval', since:SINCE_DEFAULT, sel:new Set(), tol:0, assignee:'all' };
+    // Growing tabs need a mandatory Since date; the Pending-approval tab never does (must always see ALL outstanding).
+    const SINCE_TERMINAL = s => s==='approved' || s==='rejected';
+    function needSince(){ return state.tab!=='pending-approval'; }
+
+    const cBadge = s => `<span class="badge b-${s.replace(/-/g,'')}">${s.replace('-',' ')}</span>`;
+    const varCell = v => v>0?`<span class="var-pos">+${v}</span>`:v<0?`<span class="var-neg">${v}</span>`:`<span class="var-zero">0</span>`;
+    // A count sheet spans one or many locations; these roll up across all its location groups.
+    const sheetLocs   = c => c.locations || [];
+    const sheetLines  = c => sheetLocs(c).flatMap(g=>g.lines||[]);
+    const sheetPlates = c => sheetLines(c).length;
+    const sheetNet    = c => sheetLines(c).reduce((s,l)=>s+((l.countedQty||0)-(l.systemQty||0)),0);
+    const sheetGross  = c => sheetLines(c).reduce((s,l)=>s+Math.abs((l.countedQty||0)-(l.systemQty||0)),0);  // Σ|Δ| — exposes offsetting errors
+    const sheetDisc   = c => sheetLines(c).filter(l=>l.countedQty!==l.systemQty).length;
+    const grossCell   = g => g>0?`<span class="var-gross">${g}</span>`:`<span class="var-zero">0</span>`;
+    const locLabel    = c => { const ls=sheetLocs(c); return ls.length===1?locName(ls[0].loc):`${ls.length} locations`; };
+
+    function renderTabs(){
+      const counts = k => DB.counts.filter(c=>c.site===state.site && (k==='all'||c.status===k)).length;
+      const tabs=[['pending-approval','Pending approval'],['approved','Approved'],['rejected','Rejected'],['all','All']];
+      $('tabs').innerHTML = tabs.map(([k,l])=>`<a href="#" class="${k===state.tab?'active':''}" onclick="setTab('${k}');return false">${l} <span class="muted">(${counts(k)})</span></a>`).join('');
+      $('f-since-wrap').style.display = needSince()?'':'none';
+    }
+    function setTab(k){ state.tab=k; state.sel.clear(); renderTabs(); renderList(); }
+
+    function listData(){
+      return DB.counts.filter(c=>{
+        if (c.site!==state.site) return false;
+        if (state.tab!=='all' && c.status!==state.tab) return false;
+        if (needSince() && SINCE_TERMINAL(c.status) && (c.created||'') < state.since) return false;
+        if (!assigneeFilterPass(c, state.assignee)) return false;
+        if (state.q){ const hay=`${c.id} ${sheetLocs(c).map(g=>locName(g.loc)+' '+g.loc).join(' ')}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+        return true;
+      }).sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+    }
+    // Bulk-approval eligibility: a sheet is safe to bulk-approve only if its LARGEST plate-level
+    // variance is within tolerance (offsetting errors can't net to 0 and slip through).
+    function sheetMaxAbsVar(c){ return sheetLines(c).reduce((m,l)=>Math.max(m,Math.abs((l.countedQty||0)-(l.systemQty||0))),0); }
+    function eligible(c){ return sheetMaxAbsVar(c) <= state.tol; }
+    // F13 — a sheet counted by the current user can't be bulk-approved (maker-checker); it's flagged "own sheet".
+    function selectableIds(){ return listData().filter(c=>c.status==='pending-approval' && eligible(c) && !sameActor(c.countedBy)).map(c=>c.id); }
+
+    function renderList(){
+      if (needSince() && !state.since){ $('thead').innerHTML=''; $('rows').innerHTML=`<tr><td colspan="11" class="muted" style="padding:18px">Set a <b>Since date</b> above to load ${state.tab==='all'?'':state.tab.replace('-',' ')+' '}history (bounded for performance).</td></tr>`; $('list-summary').textContent=''; $('bulkbar').style.display='none'; return; }
+      const list=listData();
+      const pending = state.tab==='pending-approval';
+      const c1 = pending ? `<th style="width:30px"><input type="checkbox" id="selall" onclick="toggleAll(this)"></th>` : `<th style="width:28px">⚙</th>`;
+      $('thead').innerHTML = `<tr>${c1}<th>ID</th><th>Date</th><th>Locations</th><th class="num">Plates</th><th class="num">Net Δ</th><th class="num" title="Gross variance — sum of absolute plate variances (Σ|counted−system|). Reveals offsetting errors that net to zero.">Gross |Δ|</th><th>Counted by</th><th>Assignee</th><th>Status</th><th></th></tr>`;
+      $('rows').innerHTML = list.length ? list.map(c=>{
+        const v=sheetNet(c), g=sheetGross(c), elig=eligible(c), own=sameActor(c.countedBy);
+        const selectable = elig && !own;            // F13 — own sheet can't be bulk-approved
+        const dtitle = own?'title="You counted this sheet — a different user must approve (maker-checker)"'
+                          : (!elig?'title="Variance exceeds tolerance — open and review individually"':'');
+        const first = pending
+          ? `<td><input type="checkbox" class="rowsel" data-id="${c.id}" ${selectable?'':'disabled'} ${state.sel.has(c.id)?'checked':''} onclick="toggleRow('${c.id}',this)" ${dtitle}></td>`
+          : `<td class="dots">⋮</td>`;
+        const reviewTag = pending ? (own?' <span style="font-size:11px;color:#7a5a07;white-space:nowrap">⚠ own sheet</span>'
+                                       : (!elig?' <span style="font-size:11px;color:#7a5a07;white-space:nowrap">⚠ review</span>':'')) : '';
+        return `<tr>${first}
+          <td class="mono"><a href="#" onclick="open_('${c.id}');return false">${c.id}</a></td>
+          <td>${esc(c.created)}</td><td>${esc(locLabel(c))}</td>
+          <td class="num">${sheetPlates(c)}</td><td class="num">${varCell(v)}</td><td class="num">${grossCell(g)}</td>
+          <td>${esc(c.countedBy||'—')}</td>
+          <td>${c.assignee ? `<span class="badge b-approved" title="Dispatched to this person">${esc(assigneeName(c.assignee))}${isMine(c)?' · me':''}</span>` : '<span class="muted">Any</span>'}</td>
+          <td>${cBadge(c.status)}${reviewTag}</td>
+          <td><a href="#" onclick="open_('${c.id}');return false">${c.status==='pending-approval'?'Review ›':'View'}</a></td></tr>`;
+      }).join('') : `<tr><td colspan="11" class="muted" style="padding:18px">No ${state.tab==='all'?'':state.tab.replace('-',' ')+' '}count sheets at ${dbName('sites',state.site)}.</td></tr>`;
+      const pend = DB.counts.filter(c=>c.site===state.site && c.status==='pending-approval').length;
+      $('list-summary').textContent = `${list.length} shown · ${pend} awaiting approval at ${dbName('sites',state.site)}`;
+      $('bulkbar').style.display = (pending && list.length) ? 'flex' : 'none';
+      updateBulkInfo();
+    }
+
+    /* ---- bulk selection + approval (Pending tab) ---- */
+    function toggleRow(id,cb){ if(cb.checked) state.sel.add(id); else state.sel.delete(id); updateBulkInfo(); }
+    function toggleAll(cb){ const ids=selectableIds(); ids.forEach(i=> cb.checked?state.sel.add(i):state.sel.delete(i));
+      document.querySelectorAll('.rowsel:not([disabled])').forEach(x=>x.checked=cb.checked); updateBulkInfo(); }
+    function updateBulkInfo(){
+      const eligIds=new Set(selectableIds()); [...state.sel].forEach(id=>{ if(!eligIds.has(id)) state.sel.delete(id); });
+      const n=state.sel.size;
+      if($('selinfo')) $('selinfo').textContent = n?`${n} selected`:'';
+      if($('bulk-approve')) $('bulk-approve').disabled=!n;
+      if($('bulk-reject'))  $('bulk-reject').disabled=!n;
+      const all=$('selall'); if(all){ const ids=selectableIds(); all.checked = ids.length>0 && ids.every(i=>state.sel.has(i)); all.indeterminate = n>0 && !all.checked; }
+    }
+    function setTol(v){ state.tol=Math.max(0,parseInt(v,10)||0); state.sel.clear(); renderList(); }
+
+    function applyApprove(c){ let corrected=0;
+      sheetLocs(c).forEach(g=>(g.lines||[]).forEach(l=>{
+        if(!l.lpn){                                    // FOUND stock — no system plate; mint a new available plate at the bin
+          const client=(DB.products.find(p=>p.id===l.product)||{}).client||'';
+          const id=nextLpnId();
+          DB.lpns.push({ id, client, site:c.site, product:l.product, qty:l.countedQty, lot:l.lot||'', expiry:l.expiry||'', serials:[], status:'available', loc:g.loc });
+          l.lpn=id;                                    // bind so a re-approval is idempotent
+          logTxn({type:'count',lpn:id,product:l.product,qty:l.countedQty,from:g.loc,site:c.site,user:'Benjamin Felix',ref:c.id,note:`Found stock — minted plate ${id} (${l.countedQty}) @ ${locName(g.loc)}`}); corrected++; return;
+        }
+        const lp=lpnById(l.lpn);
+        if(lp && lp.qty!==l.countedQty){ const before=lp.qty; lp.qty=l.countedQty;
+          logTxn({type:'count',lpn:lp.id,product:lp.product,qty:l.countedQty-before,from:g.loc,site:c.site,user:'Benjamin Felix',ref:c.id,note:`Count correction ${before}→${l.countedQty} @ ${locName(g.loc)}${l.countedQty===0?' (missing)':''}`}); corrected++; } }));
+      c.status='approved'; c.approved=TODAY; return corrected;
+    }
+    function approveSelected(){
+      const ids=[...state.sel]; if(!ids.length) return;
+      let sheets=0, plates=0;
+      ids.forEach(id=>{ const c=DB.counts.find(x=>x.id===id); if(c&&c.status==='pending-approval'&&eligible(c)&&!sameActor(c.countedBy)){ plates+=applyApprove(c); sheets++; } });
+      state.sel.clear();
+      banner(`<b>${sheets}</b> count sheet(s) approved — ${plates} plate(s) corrected, logged to audit trail.`);
+      renderTabs(); renderList();
+    }
+    function rejectSelected(){
+      const ids=[...state.sel]; if(!ids.length) return;
+      let n=0; ids.forEach(id=>{ const c=DB.counts.find(x=>x.id===id); if(c&&c.status==='pending-approval'){ c.status='rejected'; n++; } });
+      state.sel.clear();
+      banner(`<b>${n}</b> count sheet(s) rejected — stock unchanged, recount required.`);
+      renderTabs(); renderList();
+    }
+
+    function open_(id){
+      const c=DB.counts.find(x=>x.id===id); if(!c) return;
+      $('d-title').textContent=`Count sheet ${c.id}`;
+      const v=sheetNet(c), disc=sheetDisc(c), locs=sheetLocs(c);
+      const cPending = c.status==='pending-approval';
+      $('d-summary').innerHTML=[['ID',c.id],['Site',dbName('sites',c.site)],['Locations',locs.length],
+        ['Counted by',c.countedBy||'—'],['Counted',c.countedDate||c.created],['Plates',sheetPlates(c)],
+        ['Discrepancies',disc],['Net variance',(v>0?'+':'')+v],['Gross variance (Σ|Δ|)',sheetGross(c)],
+        ['Max plate Δ',sheetMaxAbsVar(c)],['Status',c.status]]
+        .map(([k,val])=>`<div><div class="k">${k}</div><div class="v">${esc(val)}</div></div>`).join('')
+        + `<div><div class="k">Assignee · dispatch to</div><div class="v">${cPending
+            ? `<select id="d-assignee" onchange="assignCount('${c.id}',this.value)" style="max-width:200px">${assigneePickerOptions(c.site, c.assignee)}</select>`
+            : (c.assignee ? esc(assigneeName(c.assignee))+(isMine(c)?' · me':'') : 'Any')}</div></div>`
+        + `<div style="grid-column:1/-1">${photoField({ ref:c.id, level:'header', title:'Count evidence (optional)', readonly:c.status!=='pending-approval' })}</div>`
+        + `<div style="grid-column:1/-1">${noteField({ ref:c.id, level:'header', title:'Count notes (optional)', readonly:c.status!=='pending-approval' })}</div>`;
+
+      $('d-lines').innerHTML=`<thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th class="num">System</th>
+        <th class="num">Counted</th><th class="num">Variance</th></tr></thead><tbody>`+
+        locs.map(g=>{ const net=(g.lines||[]).reduce((s,l)=>s+((l.countedQty||0)-(l.systemQty||0)),0);
+          const loc=DB.locations.find(x=>x.id===g.loc)||{};
+          const head=`<tr class="grp"><td colspan="5"><b>${esc(loc.structured||g.loc)}</b>${loc.area?' · Area '+loc.area:''} <span class="muted">(${(g.lines||[]).length} plate(s))</span> <span style="float:right">${photoField({ ref:`${c.id}:${g.loc}`, level:'line', readonly:c.status!=='pending-approval' })}</span><span style="float:right;margin-right:6px">${noteField({ ref:`${c.id}:${g.loc}`, level:'line', readonly:c.status!=='pending-approval' })}</span></td><td class="num">${varCell(net)}</td></tr>`;
+          const rows=(g.lines||[]).map(l=>{ const d=(l.countedQty||0)-(l.systemQty||0);
+            const foundTag='<span style="font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid #6fae72;background:#e6f3e7;color:#235c25">found</span>';
+            const missTag ='<span style="font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid #c47e7e;background:#f6e7e7;color:#7a2c2c">missing</span>';
+            const lpnCell = l.lpn ? esc(l.lpn) : '<span class="muted">—</span>';
+            const tag = (!l.lpn||l.found) ? ' '+foundTag : (l.countedQty===0 && l.systemQty>0) ? ' '+missTag : '';
+            return `<tr><td class="mono">${lpnCell}${tag}</td><td>${esc(prodName(l.product))}</td><td class="mono">${tracksLot(l.product)?esc(l.lot||'—'):'<span class="muted">n/a</span>'}</td>
+              <td class="num">${l.systemQty}</td><td class="num">${l.countedQty}</td><td class="num">${varCell(d)}</td></tr>`; }).join('');
+          return head+rows;
+        }).join('')+`</tbody>`;
+
+      const blockSelf = sameActor(c.countedBy);     // F13 — counter may not approve their own sheet
+      $('d-actions').innerHTML = c.status==='pending-approval'
+        ? (blockSelf?`<span class="mk-note">Maker-checker — <b>${esc(c.countedBy)}</b> counted this sheet; a different user must approve. Switch the “View as” user.</span>`
+                   :`<span class="req-note">${disc?`Approving corrects ${disc} plate(s) across ${locs.length} location(s) to the counted quantity.`:'No discrepancies — approving confirms the count.'}</span>`)
+           +`<span class="right"><button class="btn btn-outline" onclick="reject('${c.id}')">Reject (recount)</button>
+           <button class="btn btn-primary" onclick="approve('${c.id}')"${blockSelf?' disabled':''}>Approve &amp; correct all</button></span>`
+        : `<span class="req-note">${c.status==='approved'?`Approved ${esc(c.approved||c.created)} — stock corrected to counted figures.`:'Rejected — stock unchanged; recount required.'}</span>`;
+      show('detail');
+    }
+    function approve(id){
+      const c=DB.counts.find(x=>x.id===id); if(!c||c.status!=='pending-approval') return;
+      // F13 — separation of duties: the counter cannot approve their own sheet.
+      if (sameActor(c.countedBy)){ alert(`Maker-checker — needs a different user to approve.\n${c.id} was counted by ${c.countedBy}. Switch the "View as" user to approve.`); return; }
+      const corrected=applyApprove(c);
+      banner(`<b>${c.id}</b> approved — ${corrected} plate(s) corrected across ${sheetLocs(c).length} location(s), logged to audit trail.`);
+      renderTabs(); renderList(); show('list');
+    }
+    function reject(id){ const c=DB.counts.find(x=>x.id===id); if(!c||c.status!=='pending-approval') return;
+      c.status='rejected'; banner(`<b>${c.id}</b> rejected — stock unchanged, recount required.`); renderTabs(); renderList(); show('list'); }
+
+    /* ============================================================ CREATE — count-sheet worksheet (1..N locations) */
+    const storLocs = site => DB.locations.filter(l=>l.site===site && l.type==='storage' && l.status==='active');
+    function nextCountId(){ let n=9000; DB.counts.forEach(c=>{ const m=/CNT-(\d+)/.exec(c.id); if(m) n=Math.max(n,+m[1]); }); return 'CNT-'+(n+1); }
+    let sheet = [];   // working worksheet: [{ loc, lines:[{lpn,product,lot,systemQty,countedQty}] }]
+    const platesAt = loc => onHandLpns($('n-site').value).filter(l=>l.loc===loc && l.status!=='in-transit');
+
+    function openNew(){ sheet=[]; show('form'); $('n-site').value=state.site; if($('n-site')._ssSync)$('n-site')._ssSync();
+      $('n-assignee').innerHTML=assigneePickerOptions($('n-site').value,'');
+      $('w-blind').checked=false; fillNewLocs(); fillAreas(); renderSheet(); }
+    function fillNewLocs(){
+      const taken=new Set(sheet.map(g=>g.loc));
+      const locs=storLocs($('n-site').value).filter(l=>!taken.has(l.id));
+      $('n-loc').innerHTML = locs.length
+        ? locs.map(l=>`<option value="${l.id}">${esc(l.structured)}${l.area?' · Area '+l.area:''}${l.userRef?' · '+esc(l.userRef):''}</option>`).join('')
+        : `<option value="">— all locations added —</option>`;
+    }
+    function fillAreas(){
+      const areas=siteAreas($('n-site').value);
+      $('w-area').innerHTML = areas.length? areas.map(a=>`<option value="${a.code}">${esc(a.name||('Area '+a.code))}</option>`).join('') : `<option value="">— no areas —</option>`;
+    }
+    function addGroup(loc){
+      if(!loc || sheet.find(g=>g.loc===loc)) return false;
+      const plates=platesAt(loc); if(!plates.length) return false;
+      const blind=$('w-blind').checked;
+      sheet.push({ loc, lines:plates.map(l=>({ lpn:l.id, product:l.product, lot:l.lot||'', systemQty:l.qty, countedQty:blind?'':l.qty })) });
+      return true;
+    }
+    function addLoc(){ const loc=$('n-loc').value; if(!loc){ alert('Pick a location.'); return; }
+      if(!addGroup(loc)){ alert('That location has no countable stock (or is already on the sheet).'); return; }
+      fillNewLocs(); renderSheet(); }
+    function addArea(){ const code=$('w-area').value; if(!code) return;
+      const bins=storLocs($('n-site').value).filter(l=>l.area===code);
+      let added=0; bins.forEach(b=>{ if(addGroup(b.id)) added++; });
+      if(!added){ alert('No countable stock in that Area (or all its bins are already on the sheet).'); return; }
+      fillNewLocs(); renderSheet(); }
+    function rmGroup(i){ sheet.splice(i,1); fillNewLocs(); renderSheet(); }
+    function setCount(li,pi,val){ const l=sheet[li]&&sheet[li].lines[pi]; if(!l) return; l.countedQty = val===''?'':Math.max(0,parseInt(val,10)||0); updateSheetSummary(); }
+    // FOUND stock — a plate physically present at the bin with no system LPN (minted on approval).
+    function productOpts(sel){ return `<option value="">— product —</option>`+DB.products.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${esc(p.name)} (${esc(p.sku)})</option>`).join(''); }
+    function addFound(li){ if(!sheet[li]) return; sheet[li].lines.push({ lpn:'', found:true, product:'', lot:'', systemQty:0, countedQty:'' }); renderSheet(); }
+    function rmFound(li,pi){ const l=sheet[li]&&sheet[li].lines[pi]; if(l&&l.found){ sheet[li].lines.splice(pi,1); renderSheet(); } }
+    function setFoundField(li,pi,f,v){ const l=sheet[li]&&sheet[li].lines[pi]; if(l) l[f]=v; }
+    function wkey(e){ if(e.key==='Enter'){ e.preventDefault(); const all=[...document.querySelectorAll('#w-body .wc')]; const i=all.indexOf(e.target); if(i>=0 && i+1<all.length) all[i+1].focus(); } }
+    function toggleBlind(){ renderSheet(); }
+    function updateSheetSummary(){
+      const lines=sheet.flatMap(g=>g.lines); const plates=lines.length;
+      const net=lines.reduce((s,l)=>s+((l.countedQty===''?l.systemQty:l.countedQty)-l.systemQty),0);
+      $('w-summary').innerHTML = sheet.length ? `<b>${sheet.length}</b> location(s) · <b>${plates}</b> plate(s) · net variance so far ${varCell(net)}` : '';
+    }
+    function renderSheet(){
+      const blind=$('w-blind').checked;
+      $('w-thead').innerHTML = `<tr><th>LPN</th><th>Product</th><th>Lot</th>${blind?'':'<th class="num">System</th>'}<th class="num">Counted</th></tr>`;
+      if(!sheet.length){ $('w-body').innerHTML=''; $('w-empty').textContent='Add a location — or a whole Area — to start the count sheet.'; $('w-save').disabled=true; updateSheetSummary(); return; }
+      $('w-empty').textContent=''; $('w-save').disabled=false;
+      $('w-body').innerHTML = sheet.map((g,li)=>{
+        const loc=DB.locations.find(x=>x.id===g.loc)||{};
+        const head=`<tr class="grp"><td colspan="${blind?4:5}"><b>${esc(loc.structured||g.loc)}</b>${loc.area?' · Area '+loc.area:''} <span class="muted">(${g.lines.length} plate(s))</span> <a href="#" onclick="rmGroup(${li});return false" style="float:right">remove</a></td></tr>`;
+        const rows=g.lines.map((l,pi)=> l.found
+          ? `<tr><td><span style="font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid #6fae72;background:#e6f3e7;color:#235c25">found</span></td>
+              <td><select onchange="setFoundField(${li},${pi},'product',this.value);renderSheet()">${productOpts(l.product)}</select></td>
+              <td>${tracksLot(l.product)?`<input value="${esc(l.lot||'')}" placeholder="lot" oninput="setFoundField(${li},${pi},'lot',this.value)" style="width:84px">`:'<span class="muted">n/a</span>'}</td>
+              ${blind?'':`<td class="num">0</td>`}
+              <td class="num"><input class="wc" type="number" min="1" value="${l.countedQty}" style="width:70px;text-align:right" oninput="setCount(${li},${pi},this.value)" onkeydown="wkey(event)"> <a href="#" onclick="rmFound(${li},${pi});return false" title="remove">×</a></td></tr>`
+          : `<tr><td class="mono">${esc(l.lpn)}</td><td>${esc(prodName(l.product))}</td><td class="mono">${tracksLot(l.product)?esc(l.lot||'—'):'<span class="muted">n/a</span>'}</td>
+              ${blind?'':`<td class="num">${l.systemQty}</td>`}
+              <td class="num"><input class="wc" type="number" min="0" value="${l.countedQty}" style="width:88px;text-align:right" oninput="setCount(${li},${pi},this.value)" onkeydown="wkey(event)"></td></tr>`).join('');
+        const addFoundRow=`<tr><td colspan="${blind?4:5}" style="padding-top:2px"><a href="#" onclick="addFound(${li});return false" style="font-size:12px">+ found plate (physically here, not in the system)</a></td></tr>`;
+        return head+rows+addFoundRow;
+      }).join('');
+      updateSheetSummary();
+    }
+    function saveSheet(){
+      if(!sheet.length){ alert('Add at least one location to count.'); return; }
+      const blind=$('w-blind').checked; let missing=0;
+      // found lines need a product + a positive qty
+      for(const g of sheet){ for(const l of g.lines){ if(l.found){
+        if(!l.product){ alert('Pick a product for each found plate (or remove it).'); return; }
+        if(!(parseInt(l.countedQty,10)>0)){ alert('Enter a quantity (>0) for each found plate.'); return; } } } }
+      const locations=sheet.map(g=>({ loc:g.loc, lines:g.lines.map(l=>{
+        let cq=l.countedQty; if(cq===''||cq==null){ if(blind && !l.found) missing++; cq=l.found?0:l.systemQty; }
+        const row={ lpn:l.found?'':l.lpn, product:l.product, lot:l.lot||'', systemQty:l.found?0:l.systemQty, countedQty:Math.max(0,parseInt(cq,10)||0) };
+        if(l.found) row.found=true; return row; }) }));
+      if(blind && missing){ alert(`${missing} plate(s) have no count. Enter a count for every plate (use 0 for a missing plate).`); return; }
+      const c={ id:nextCountId(), site:$('n-site').value, status:'pending-approval', created:TODAY,
+        countedBy:($('n-by').value.trim()||'—'), countedDate:TODAY,
+        assignee:($('n-assignee')?$('n-assignee').value:''), locations };
+      DB.counts.push(c);
+      const plates=locations.reduce((s,g)=>s+g.lines.length,0);
+      state.tab='pending-approval'; state.site=c.site; $('f-site').value=c.site; if($('f-site')._ssSync)$('f-site')._ssSync();
+      banner(`<b>${c.id}</b> created — ${plates} plate(s) across ${locations.length} location(s), awaiting approval.`);
+      renderTabs(); renderList(); show('list');
+    }
+
+    function show(v){ ['list','detail','form'].forEach(x=>$('view-'+x).style.display=x===v?'':'none'); window.scrollTo(0,0); }
+    // Dispatch a count sheet to a person (or clear it) from the detail view; persists onto the live record.
+    function assignCount(id, uid){ const c=DB.counts.find(x=>x.id===id); if(c){ c.assignee=uid; renderList(); } }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    // F13 — "View as" approver switch (maker-checker demo). Populated from DB.users; defaults to the current user.
+    function fillViewAs(){
+      const cur=currentUser(); const names=DB.users.map(u=>u.name);
+      const opts = names.includes(cur) ? names : [cur].concat(names);
+      $('view-as').innerHTML = opts.map(n=>`<option value="${esc(n)}"${n===cur?' selected':''}>${esc(n)}</option>`).join('');
+    }
+    function setUser(name){ setCurrentUser(name); fillViewAs(); state.sel.clear(); renderTabs(); renderList(); }
+    fillViewAs();
+    $('f-site').innerHTML = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-assignee').innerHTML = assigneeFilterOptions('', state.assignee);
+    $('f-site').addEventListener('change',e=>{ state.site=e.target.value; state.sel.clear(); renderTabs(); renderList(); });
+    $('tol').addEventListener('input', e=>setTol(e.target.value));
+    $('f-since').value = SINCE_DEFAULT;
+    $('f-since').addEventListener('change',e=>{ state.since=e.target.value; renderList(); });
+    $('f-assignee').addEventListener('change',e=>{ state.assignee=e.target.value; state.sel.clear(); renderList(); });
+    $('f-q').addEventListener('input',e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    $('n-site').innerHTML = $('f-site').innerHTML;
+    $('n-site').addEventListener('change', ()=>{ sheet=[]; $('n-assignee').innerHTML=assigneePickerOptions($('n-site').value, $('n-assignee').value); fillNewLocs(); fillAreas(); renderSheet(); });
+    renderTabs(); renderList();
+
+    /* ---- deep-link hand-off: ?loc=<locId> opens a new count sheet with that location added
+            (from the Stock Status ⋮ menu — mirrors the ?asn=/?out= pattern) ---- */
+    (function(){
+      const loc = new URLSearchParams(location.search).get('loc');
+      if (!loc) return;
+      const L = DB.locations.find(x=>x.id===loc);
+      if (!L) return;
+      state.site = L.site; $('f-site').value = L.site; if($('f-site')._ssSync)$('f-site')._ssSync();
+      renderTabs(); renderList();
+      openNew();                                      // New count sheet, n-site=state.site
+      $('n-site').value = L.site; if($('n-site')._ssSync)$('n-site')._ssSync();
+      fillNewLocs(); fillAreas();
+      if (addGroup(loc)){ fillNewLocs(); renderSheet(); }   // drop the location's plates onto the sheet
+    })();
+  </script>
+</body></html>

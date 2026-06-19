@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Consignees (ship-to) — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-consignees" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Consignees (ship-to)">
+  <div id="page-content">
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+      <div class="page-head"><h1>Consignees (ship-to)</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn btn-outline" onclick="openCreate()">Create consignee</button>
+          <button class="btn" disabled>Export</button></div></div>
+      <p class="sub"><b>Consignees</b> are a client's delivery points — its stores, hospitals or end customers.
+        A 3PL outbound order ships to a <b>consignee</b>, not to the client itself (the client owns the stock; the
+        consignee is where it goes). Client-scoped: each consignee belongs to one client.</p>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Client</span><select id="f-client"></select></label>
+          <label class="field"><span>Status</span><select id="f-status"><option value="all">Any</option><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+          <label class="field"><span>Name / city</span><input id="f-q" placeholder="Search…"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>Consignee</th><th><span class="funnel">▾</span>Address</th>
+          <th>City</th><th>Country</th><th>Contact</th><th>Status</th></tr></thead>
+          <tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== EDIT / CREATE ===================== -->
+    <div id="view-edit" style="display:none">
+      <div class="page-head"><h1 id="edit-title">Edit consignee</h1>
+        <div class="acts"><button class="btn btn-primary" onclick="saveRec()">Save consignee</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Consignee</legend>
+          <div class="field-row">
+            <label class="field"><span>Owning client <span class="req">*</span></span><select id="e-client"></select></label>
+            <label class="field" style="flex:2"><span>Consignee name <span class="req">*</span></span><input id="e-name"></label>
+            <label class="field"><span>Status</span><select id="e-status"><option>active</option><option>inactive</option></select></label>
+          </div>
+        </fieldset>
+        <fieldset><legend>Delivery address</legend>
+          <div class="field-row">
+            <label class="field" style="flex:3"><span>Street address</span><input id="e-address"></label>
+            <label class="field"><span>City</span><input id="e-city"></label>
+            <label class="field"><span>Country</span><input id="e-country"></label>
+          </div>
+          <div class="field-row">
+            <label class="field"><span>Contact</span><input id="e-contact"></label>
+            <label class="field"><span>Phone</span><input id="e-phone"></label>
+          </div>
+        </fieldset>
+        <div id="e-notes" style="margin:10px 0"></div>
+        <p class="wf-note muted">Consignees appear in the <b>Ship-to</b> picker on the Outbound Orders screen and print on the delivery note.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const state = { client:'all', status:'all', q:'' };
+    let editing = null;
+
+    function matches(r){
+      if (state.client!=='all' && r.client!==state.client) return false;
+      if (state.status!=='all' && (r.status||'active')!==state.status) return false;
+      if (state.q){ const hay=`${r.name} ${r.city||''} ${r.address||''}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+      return true;
+    }
+    function renderList(){
+      const list = (DB.consignees||[]).filter(matches)
+        .sort((a,b)=> (dbName('clients',a.client)).localeCompare(dbName('clients',b.client)) || a.name.localeCompare(b.name));
+      // grouped by client (funnel style)
+      let html='', curC=null;
+      list.forEach(r=>{
+        if (r.client!==curC){ curC=r.client;
+          html += `<tr class="group"><td></td><td colspan="6"><b>${esc(dbName('clients',r.client))}</b></td></tr>`; }
+        html += `<tr><td class="dots">⋮</td>
+          <td><a href="#" onclick="openEdit('${r.id}');return false">${esc(r.name)}</a> <span class="muted mono" style="font-size:11px">${esc(r.id)}</span></td>
+          <td>${esc(r.address||'—')}</td><td>${esc(r.city||'—')}</td><td>${esc(r.country||'—')}</td>
+          <td class="muted">${esc(r.contact||'—')}</td>
+          <td><span class="badge ${ (r.status||'active')==='active'?'b-available':''}">${esc(r.status||'active')}</span></td></tr>`;
+      });
+      $('rows').innerHTML = html || `<tr><td colspan="7" class="muted" style="padding:18px">No consignees.</td></tr>`;
+      $('list-summary').textContent = `${list.length} consignee(s) across ${new Set(list.map(r=>r.client)).size} client(s)`;
+    }
+
+    function openEdit(id){
+      const r = (DB.consignees||[]).find(x=>x.id===id) || {};
+      editing = id;
+      $('edit-title').textContent = `Edit consignee — ${r.name||id}`;
+      $('e-client').value=r.client||''; if($('e-client')._ssSync)$('e-client')._ssSync();
+      $('e-name').value=r.name||''; $('e-address').value=r.address||''; $('e-city').value=r.city||'';
+      $('e-country').value=r.country||''; $('e-contact').value=r.contact||''; $('e-phone').value=r.phone||'';
+      $('e-status').value=r.status||'active'; if($('e-status')._ssSync)$('e-status')._ssSync();
+      $('e-notes').innerHTML = noteField({ ref: id, level:'header', title:'Notes (optional)' });
+      show('edit');
+    }
+    function openCreate(){
+      editing = null;
+      $('edit-title').textContent = 'New consignee';
+      $('e-client').value = state.client!=='all'?state.client:(DB.clients[0]||{}).id; if($('e-client')._ssSync)$('e-client')._ssSync();
+      ['name','address','city','country','contact','phone'].forEach(k=>$('e-'+k).value='');
+      $('e-status').value='active'; if($('e-status')._ssSync)$('e-status')._ssSync();
+      $('e-notes').innerHTML = noteField({ ref:'CNE-DRAFT', level:'header', title:'Notes (optional)' });
+      show('edit');
+    }
+    function saveRec(){
+      const name=($('e-name').value||'').trim();
+      if(!name){ alert('Consignee name is required.'); return; }
+      if(!$('e-client').value){ alert('Choose the owning client.'); return; }
+      banner(`<b>${esc(name)}</b> saved as a ship-to for ${esc(dbName('clients',$('e-client').value))}.`);
+      show('list'); renderList();
+    }
+
+    function show(v){ $('view-list').style.display=v==='list'?'':'none'; $('view-edit').style.display=v==='edit'?'':'none'; window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* init */
+    $('f-client').innerHTML = `<option value="all">All clients</option>`+DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('e-client').innerHTML = DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-client').addEventListener('change',e=>{ state.client=e.target.value; renderList(); });
+    $('f-status').addEventListener('change',e=>{ state.status=e.target.value; renderList(); });
+    $('f-q').addEventListener('input',e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    renderList();
+  </script>
+</body></html>

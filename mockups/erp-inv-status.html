@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stock Status — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="inv-status" data-erp-title="Inventory Ops"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Inventory Ops › Stock Status">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-ok    { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-warn  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-block { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .tag.tag-muted { color:var(--ink-faint); }
+
+      table.wf td.num, table.wf th.num { text-align:right; white-space:nowrap; }
+      table.wf tr.group td .gsum { font-weight:400; color:var(--ink-soft); font-size:12px; margin-left:8px; }
+      table.wf tr.blocked td { background:#fcf5f5; }
+      table.wf tr.blocked:hover td { background:#f8eeee; }
+
+      /* bulk action bar (clone of the Locations bulk pattern) */
+      .bulkbar { position:sticky; top:0; z-index:5; display:none; align-items:center; gap:14px; flex-wrap:wrap;
+        background:var(--brand-tint); border:1px solid var(--brand); border-radius:var(--radius);
+        padding:10px 14px; margin-bottom:12px; }
+      .bulkbar.show { display:flex; }
+      .bulkbar .n { font-weight:700; }
+      .bulkbar .grow { flex:1; }
+      .bulkbar label { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); margin-right:4px; }
+      .bulkbar select, .bulkbar input { width:auto; min-width:150px; }
+      .legend-row { display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:var(--ink-soft); margin:6px 0 0; }
+      a.disp-link { font-size:12px; color:#7a2c2c; white-space:nowrap; }
+
+      /* per-row action menu (⋮) — turns Stock Status into an inventory-control hub */
+      td.dots { cursor:pointer; user-select:none; color:var(--ink-soft); font-weight:700; }
+      td.dots:hover { color:var(--brand); }
+      .rowmenu { position:fixed; z-index:40; display:none; min-width:190px; background:#fff;
+        border:1px solid var(--line); border-radius:var(--radius); box-shadow:0 6px 22px rgba(0,0,0,.16); padding:5px 0; }
+      .rowmenu.show { display:block; }
+      .rowmenu .mi { display:flex; gap:9px; align-items:center; padding:8px 14px; font-size:13px; cursor:pointer; white-space:nowrap; }
+      .rowmenu .mi:hover { background:var(--brand-tint); }
+      .rowmenu .mhd { padding:4px 14px 6px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .rowmenu .sep { border-top:1px solid var(--line); margin:4px 0; }
+      .rowmenu .mi .ic { width:16px; text-align:center; }
+
+      /* history modal */
+      .ovl { position:fixed; inset:0; background:rgba(20,28,42,.45); z-index:60; display:none; align-items:flex-start; justify-content:center; padding:54px 16px; }
+      .ovl.show { display:flex; }
+      .ovl .box { background:#fff; border-radius:var(--radius); width:min(760px,96vw); max-height:82vh; overflow:auto; box-shadow:0 18px 50px rgba(0,0,0,.3); }
+      .ovl .box-h { display:flex; align-items:center; gap:10px; padding:14px 18px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#fff; }
+      .ovl .box-h .x { margin-left:auto; cursor:pointer; font-size:20px; color:var(--ink-soft); line-height:1; }
+      .ovl .box-b { padding:14px 18px; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Stock Status</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn" disabled>Export</button></div>
+      </div>
+      <p class="sub">Current on-hand stock, derived from license plates (LPNs). Block stock by moving it to
+        <b>quarantine</b>, <b>hold</b>, <b>damaged</b> or <b>expired</b> — blocked plates are excluded from outbound allocation —
+        or release it back to <b>available</b>. Status changes are reason-coded and written to the audit trail.</p>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site (operator)</span><select id="f-site"></select></label>
+          <label class="field"><span>Client</span><select id="f-client"></select></label>
+          <label class="field"><span>Product / LPN / lot</span><input id="f-q" placeholder="Search…"></label>
+          <label class="field"><span>Status</span><select id="f-status">
+            <option value="all">All statuses</option>
+            <option value="onhand">On-hand (qty &gt; 0)</option>
+            <option value="available">Available</option>
+            <option value="allocatable">Allocatable only</option>
+            <option value="blocked">Blocked (quarantine / hold / damaged / expired)</option>
+            <option value="to-putaway">Awaiting putaway</option>
+            <option value="to-inspect">Awaiting inspection</option>
+            <option value="in-transit">In transit</option>
+          </select></label>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <!-- bulk status-change bar -->
+      <div class="bulkbar" id="bulkbar">
+        <span class="n" id="bulk-n">0 selected</span>
+        <label>Change status to</label>
+        <select id="bulk-status">
+          <option value="available">Available (release)</option>
+          <option value="quarantine">Quarantine</option>
+          <option value="hold">Hold</option>
+          <option value="damaged">Damaged</option>
+          <option value="expired">Expired</option>
+        </select>
+        <label>Reason</label>
+        <select id="bulk-reason"><option value="">— select —</option></select>
+        <input id="bulk-note" placeholder="Note (optional)">
+        <label id="auth-lbl" style="display:none">Client auth ref <span class="req">*</span></label>
+        <input id="bulk-auth" style="display:none" placeholder="Client sign-off ref (hold release)">
+        <span class="grow"></span>
+        <button class="btn btn-outline btn-sm" onclick="clearSel()">Clear</button>
+        <button class="btn btn-primary btn-sm" id="bulk-apply" onclick="applyStatus()">Apply</button>
+      </div>
+
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button>
+        <button class="btn btn-sm btn-outline" id="sel-expired" onclick="selectExpired()" title="Select every past-expiry plate in view and pre-set the status change to Expired">⚠ Select expired</button>
+        <button class="btn btn-sm btn-outline" id="flag-expired" onclick="flagExpiredNow()" title="Flip every past-expiry available plate at this site to Expired (blocked) in one pass">⚑ Flag expired now</button>
+        <span class="chip">↑ Product <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" id="sel-all" style="width:auto" onchange="toggleAll(this.checked)"></th>
+          <th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>LPN</th>
+          <th><span class="funnel">▾</span>Lot</th>
+          <th><span class="funnel">▾</span>Expiry</th>
+          <th><span class="funnel">▾</span>Location</th>
+          <th class="num"><span class="funnel">▾</span>On-hand</th>
+          <th class="num">Free</th>
+          <th><span class="funnel">▾</span>Status</th>
+          <th>Allocation</th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+      <div class="legend-row">
+        <span><span class="tag tag-ok">available</span> shippable</span>
+        <span><span class="tag tag-block">blocked</span> excluded from allocation</span>
+        <span><span class="tag tag-muted">to-putaway / to-inspect / in-transit</span> not yet allocatable</span>
+      </div>
+    </div>
+
+    <!-- per-row action menu (deep-links to the other Inv-Ops screens with the plate pre-loaded) -->
+    <div class="rowmenu" id="rowmenu"></div>
+
+    <!-- plate history modal (reads the audit trail DB.txns for one LPN) -->
+    <div class="ovl" id="hist-ovl" onclick="if(event.target===this)closeHist()">
+      <div class="box">
+        <div class="box-h"><b id="hist-ttl">Plate history</b><span class="x" onclick="closeHist()">✕</span></div>
+        <div class="box-b" id="hist-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/barcode.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-15';
+    const daysTo = d => d ? Math.round((new Date(d) - new Date(TODAY)) / 864e5) : null;
+
+    const state = { site:'S-LYON', client:'all', q:'', status:'onhand' };
+    const sel = new Set();                                  // selected LPN ids
+
+    /* ---------- filtered + grouped stock ---------- */
+    function rowsData(){
+      let list = onHandLpns(state.site).filter(l=>{
+        if (state.client!=='all' && l.client!==state.client) return false;
+        if (state.status==='onhand')      { /* qty>0 already */ }
+        else if (state.status==='available')   { if (l.status!=='available') return false; }
+        else if (state.status==='allocatable') { if (!isAllocatable(l)) return false; }
+        else if (state.status==='blocked')      { if (!isBlocked(l.status)) return false; }
+        else if (state.status!=='all')          { if (l.status!==state.status) return false; }
+        if (state.q){
+          const p = DB.products.find(x=>x.id===l.product)||{};
+          const hay = `${l.id} ${l.lot||''} ${p.name||''} ${p.sku||''} ${l.product}`.toLowerCase();
+          if (!hay.includes(state.q)) return false;
+        }
+        return true;
+      });
+      // group by product
+      const groups = {};
+      list.forEach(l => { (groups[l.product] = groups[l.product] || []).push(l); });
+      return Object.keys(groups)
+        .sort((a,b)=>prodName(a).localeCompare(prodName(b)))
+        .map(pid => ({ product:pid, lpns:groups[pid] }));
+    }
+
+    function statusTag(l){
+      if (l.status==='available') return `<span class="tag tag-ok">available</span>`;
+      if (isBlocked(l.status))    return `<span class="tag tag-block">${esc(l.status)}</span>`;
+      return `<span class="tag tag-muted">${esc(l.status)}</span>`;
+    }
+    // F11 — blocked / past-expiry plates get a quick "Dispose ▸" hand-off to the scrap-out screen.
+    const disposeLink = l => `<a class="disp-link" href="erp-inv-dispose.html?lpn=${l.id}" title="Scrap / dispose this plate">Dispose ▸</a>`;
+    function allocCell(l){
+      if (l.status==='available' && isExpired(l)) return `<span class="tag tag-block">excluded · expired</span> ${disposeLink(l)}`;
+      if (l.status==='available'){
+        const free = lpnAvail(l.id);
+        const reserved = (l.qty||0) - free;
+        if (free<=0) return `<span class="tag tag-warn">fully reserved</span>`;
+        return `<span class="tag tag-ok">allocatable</span>${reserved>0?` <span class="tag tag-muted">${reserved} reserved</span>`:''}`;
+      }
+      if (isBlocked(l.status)) return `<span class="tag tag-block">excluded</span> ${disposeLink(l)}`;
+      return `<span class="tag tag-muted">—</span>`;
+    }
+
+    function renderList(){
+      const groups = rowsData();
+      const flat = groups.flatMap(g=>g.lpns);
+      // prune selection to visible rows
+      [...sel].forEach(id => { if (!flat.find(l=>l.id===id)) sel.delete(id); });
+
+      $('rows').innerHTML = groups.length ? groups.map(g=>{
+        const p = DB.products.find(x=>x.id===g.product)||{};
+        const tot = g.lpns.reduce((s,l)=>s+(l.qty||0),0);
+        const avail = g.lpns.filter(l=>l.status==='available').reduce((s,l)=>s+(l.qty||0),0);
+        const blocked = g.lpns.filter(l=>isBlocked(l.status)).reduce((s,l)=>s+(l.qty||0),0);
+        const head = `<tr class="group"><td colspan="10">${esc(prodName(g.product))}
+          <span class="gsum">${g.lpns.length} plate(s) · ${tot} ${esc(p.uom||'')} on-hand · ${avail} available${blocked?` · ${blocked} blocked`:''}</span></td></tr>`;
+        const body = g.lpns.map(l=>{
+          const tracksExp = !!(p.track && p.track.expiry);
+          const dd = daysTo(l.expiry);
+          let expCell = tracksExp ? esc(l.expiry||'—') : '<span class="muted">—</span>';
+          if (tracksExp && dd!=null && dd<0)        expCell += ` <span class="tag tag-block">expired</span>`;
+          else if (tracksExp && dd!=null && dd<=30) expCell += ` <span class="tag tag-warn">${dd}d</span>`;
+          const checked = sel.has(l.id) ? 'checked' : '';
+          return `<tr class="${isBlocked(l.status)?'blocked':''} ${sel.has(l.id)?'selected':''}">
+            <td><input type="checkbox" style="width:auto" ${checked} onchange="toggleRow('${l.id}',this.checked)"></td>
+            <td class="dots" onclick="openRowMenu(event,'${l.id}')" title="Actions">⋮</td>
+            <td class="mono">${l.id}</td>
+            <td class="mono">${esc(l.lot||'—')}</td>
+            <td>${expCell}</td>
+            <td class="mono">${esc(locName(l.loc))}</td>
+            <td class="num">${l.qty}</td>
+            <td class="num">${l.status==='available'?lpnAvail(l.id):'<span class="muted">—</span>'}</td>
+            <td>${statusTag(l)} ${photoField({ ref:l.id, level:'line', title:'Condition' })} ${noteField({ ref:l.id, level:'line', title:'Condition note' })}</td>
+            <td>${allocCell(l)}</td>
+          </tr>`;
+        }).join('');
+        return head + body;
+      }).join('') : `<tr><td colspan="10" class="muted" style="padding:18px">No stock matches the filters at ${esc(dbName('sites',state.site))}.</td></tr>`;
+
+      const onhand = onHandLpns(state.site).filter(l=>state.client==='all'||l.client===state.client);
+      const totUnits = onhand.reduce((s,l)=>s+(l.qty||0),0);
+      const blockedN = onhand.filter(l=>isBlocked(l.status)).length;
+      $('list-summary').textContent = `${flat.length} of ${onhand.length} plate(s) · ${totUnits} unit(s) on-hand · ${blockedN} blocked at ${dbName('sites',state.site)}`;
+      $('sel-all').checked = flat.length>0 && flat.every(l=>sel.has(l.id));
+      renderBulk();
+    }
+
+    /* ---------- reasons are scoped to the TARGET status, read from Master Data (DB.reasonDomains) ---------- */
+    function fillReasons(){
+      const tgt = $('bulk-status').value;
+      const opts = reasonsFor('status', tgt).concat('Other (see note)');   // configurable in erp-md-reasons.html
+      $('bulk-reason').innerHTML = `<option value="">— select —</option>` + opts.map(o=>`<option>${esc(o)}</option>`).join('');
+      updateAuthField();
+    }
+    /* ---------- F23: releasing a HOLD plate back to available needs a client authorization ref ---------- */
+    function holdInSelection(){ return [...sel].some(id=>{ const l=lpnById(id); return l && l.status==='hold'; }); }
+    function updateAuthField(){
+      const need = $('bulk-status').value==='available' && holdInSelection();
+      $('bulk-auth').style.display = need?'':'none';
+      $('auth-lbl').style.display  = need?'':'none';
+      if(!need) $('bulk-auth').value='';
+    }
+
+    /* ---------- selection + bulk status change ---------- */
+    function toggleRow(id, on){ on ? sel.add(id) : sel.delete(id); renderList(); }
+    function toggleAll(on){ rowsData().flatMap(g=>g.lpns).forEach(l=> on?sel.add(l.id):sel.delete(l.id)); renderList(); }
+    function clearSel(){ sel.clear(); renderList(); }
+    function renderBulk(){
+      const n = sel.size;
+      $('bulkbar').classList.toggle('show', n>0);
+      $('bulk-n').textContent = `${n} plate(s) selected`;
+      updateAuthField();
+    }
+    function applyStatus(){
+      const target = $('bulk-status').value;
+      const reason = $('bulk-reason').value;
+      const note = $('bulk-note').value.trim();
+      if (!sel.size) return;
+      if (!reason){ alert('Select a reason for the status change (audit requirement).'); return; }
+      // F23 — releasing a HOLD plate to AVAILABLE requires a client authorization (sign-off) ref.
+      const releasingHold = target==='available' && holdInSelection();
+      const authRef = $('bulk-auth').value.trim();
+      if (releasingHold && !authRef){ alert('Releasing a plate from HOLD requires a Client authorization ref (client sign-off).'); $('bulk-auth').focus(); return; }
+      // Releasing back to AVAILABLE is the higher-risk direction (blocked goods become shippable again) → confirm.
+      if (target==='available' &&
+          !confirm(`Release ${sel.size} plate(s) back to AVAILABLE?\nThey will become shippable (allocatable) again.`)) return;
+      // Blocking a plate that is already reserved on an open order would orphan that allocation → warn first.
+      if (isBlocked(target)){
+        const hits = [...sel].map(id=>({id, orders:ordersReserving(id)})).filter(h=>h.orders.length);
+        if (hits.length){
+          const detail = hits.map(h=>`  • ${h.id} → ${h.orders.join(', ')}`).join('\n');
+          if (!confirm(`${hits.length} selected plate(s) are reserved on open order(s):\n\n${detail}\n\n`
+            + `Blocking them to "${target}" releases those reservations — the order(s) must be re-allocated. Continue?`)) return;
+        }
+      }
+      let changed = 0, skipped = 0;
+      [...sel].forEach(id=>{
+        const l = lpnById(id); if (!l) return;
+        if (['to-putaway','to-inspect','in-transit','dispatched'].includes(l.status)){ skipped++; return; }  // not a status-mgmt candidate
+        if (l.status===target){ skipped++; return; }
+        const prev = l.status;
+        l.status = target;
+        const auth = (prev==='hold' && target==='available' && authRef) ? ` · client auth ${authRef}` : '';
+        logTxn({ type:'status', lpn:l.id, product:l.product, qty:l.qty, site:l.site,
+          user:'Benjamin Felix', ref:auth?authRef:'', note:`${prev} → ${target} · ${reason}${note?' · '+note:''}${auth}` });
+        changed++;
+      });
+      sel.clear();
+      $('bulk-reason').value=''; $('bulk-note').value=''; $('bulk-auth').value=''; updateAuthField();
+      $('banner').innerHTML = `<b>${changed}</b> plate(s) set to <b>${esc(target)}</b>${isBlocked(target)?' — now excluded from allocation':''}${skipped?` · <span class="muted">${skipped} skipped (not in a changeable state, or already ${esc(target)})</span>`:''}. Logged to audit trail.`;
+      $('banner').style.display='block';
+      renderList();
+      window.scrollTo(0,0);
+    }
+
+    /* ---------- F11 "Flag expired now": flip every past-expiry available plate at this site to Expired ---------- */
+    function flagExpiredNow(){
+      const n = sweepExpired(state.site, { reason:'Shelf-life / expiry date passed' });
+      sel.clear();
+      if (n){ $('banner').innerHTML = `<b>${n}</b> past-expiry plate(s) at ${esc(dbName('sites',state.site))} flagged <b>expired</b> — now excluded from allocation. Logged to audit trail.`; }
+      else  { $('banner').innerHTML = `No past-expiry <b>available</b> plates to flag at ${esc(dbName('sites',state.site))}.`; }
+      $('banner').style.display='block';
+      renderList(); window.scrollTo(0,0);
+    }
+
+    /* ---------- "Select expired": one-click block of every past-expiry plate in view ---------- */
+    function selectExpired(){
+      const flat = rowsData().flatMap(g=>g.lpns);
+      const exp = flat.filter(l => isExpired(l) && l.status!=='expired'
+        && !['to-putaway','to-inspect','in-transit','dispatched'].includes(l.status));
+      if (!exp.length){ alert('No past-expiry plates in the current view (that aren’t already Expired).'); return; }
+      exp.forEach(l=>sel.add(l.id));
+      $('bulk-status').value='expired'; fillReasons();           // pre-set the target + its reason list
+      renderList();
+    }
+
+    /* ---------- which open orders reserve a plate (so blocking can warn before orphaning) ---------- */
+    function ordersReserving(lpnId){
+      const out=[];
+      (DB.outbound||[]).forEach(o=>{
+        if (!['allocated','picking','picked'].includes(o.status)) return;
+        if ((o.lines||[]).some(ln=>(ln.alloc||[]).some(a=>a.lpn===lpnId))) out.push(o.ref||o.id);
+      });
+      return out;
+    }
+
+    /* ---------- per-row ⋮ menu → launch the other Inv-Ops screens on this plate ---------- */
+    let menuLpn = null;
+    function openRowMenu(ev, id){
+      ev.stopPropagation();
+      menuLpn = id;
+      const l = lpnById(id)||{};
+      const m = $('rowmenu');
+      m.innerHTML = `<div class="mhd">${esc(id)}</div>
+        <div class="mi" onclick="rowAct('hist')"><span class="ic">🕘</span>View history (this plate)</div>
+        <div class="mi" onclick="rowAct('card')"><span class="ic">▤</span>Stock card (whole product)</div>
+        <div class="mi" onclick="rowAct('label')"><span class="ic">▥</span>Print plate label</div>
+        <div class="sep"></div>
+        <div class="mi" onclick="rowAct('adjust')"><span class="ic">±</span>Adjust quantity</div>
+        <div class="mi" onclick="rowAct('move')"><span class="ic">→</span>Move / transfer</div>
+        <div class="mi" onclick="rowAct('split')"><span class="ic">⑃</span>Split / repack</div>
+        <div class="mi" onclick="rowAct('count')"><span class="ic">▦</span>Count this location</div>`
+        + (isBlocked(l.status) ? `<div class="sep"></div><div class="mi" onclick="rowAct('dispose')"><span class="ic">🗑</span>Dispose / scrap</div>` : '');
+      m.classList.add('show');
+      const r = ev.currentTarget.getBoundingClientRect();
+      const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+      let x = r.right, y = r.top;
+      if (x + m.offsetWidth > vw) x = r.left - m.offsetWidth;       // flip left near the edge
+      if (y + m.offsetHeight > vh) y = vh - m.offsetHeight - 8;
+      m.style.left = Math.max(8,x) + 'px'; m.style.top = Math.max(8,y) + 'px';
+    }
+    function closeRowMenu(){ $('rowmenu').classList.remove('show'); }
+    document.addEventListener('click', e=>{ if (!e.target.closest('#rowmenu') && !e.target.classList.contains('dots')) closeRowMenu(); });
+    function rowAct(kind){
+      const id = menuLpn, l = lpnById(id)||{}; closeRowMenu();
+      if (kind==='hist'){ viewHistory(id); return; }
+      // full product audit ledger (optionally scoped to this plate's lot) — Reports › Stock Card
+      if (kind==='card'){ location.href = `erp-rpt-stockcard.html?product=${l.product}${l.lot?`&lot=${encodeURIComponent(l.lot)}`:''}`; return; }
+      // LPN handling-unit label (Code 128 of the LPN id + genealogy)
+      if (kind==='label'){ printPlateLabel(id); return; }
+      // mock hand-off, mirrors the ?asn=/?out= pattern — target screens pre-load the plate in the coding phase
+      const url = kind==='adjust' ? `erp-inv-adjust.html?lpn=${id}`
+        : kind==='move'    ? `erp-inv-transfer.html?lpn=${id}`
+        : kind==='split'   ? `erp-inv-repack.html?lpn=${id}`
+        : kind==='dispose' ? `erp-inv-dispose.html?lpn=${id}`           // F11/F13 — scrap-out a blocked plate
+        : `erp-inv-count.html?loc=${encodeURIComponent(l.loc||'')}`;
+      location.href = url;
+    }
+
+    /* ---------- plate history (reads the audit trail DB.txns) ---------- */
+    function viewHistory(id){
+      const rows = (DB.txns||[]).filter(t=>t.lpn===id).sort((a,b)=>String(a.ts).localeCompare(String(b.ts)));
+      $('hist-ttl').textContent = `Plate history · ${id}`;
+      $('hist-body').innerHTML = rows.length
+        ? `<table class="wf"><thead><tr><th>When</th><th>Event</th><th class="num">Qty</th><th>From → To</th><th>User</th><th>Ref / note</th></tr></thead><tbody>${
+            rows.map(t=>`<tr><td class="mono">${esc(t.ts)}</td><td>${esc(t.type)}</td><td class="num">${t.qty==null?'':t.qty}</td>
+              <td class="mono">${esc(t.from||'—')} → ${esc(t.to||'—')}</td><td>${esc(t.user||'')}</td>
+              <td>${esc(t.ref||'')}${t.note?` <span class="muted">· ${esc(t.note)}</span>`:''}</td></tr>`).join('')}</tbody></table>`
+        : `<p class="muted" style="padding:8px 0">No audit events recorded for this plate yet.</p>`;
+      $('hist-ovl').classList.add('show');
+    }
+    function closeHist(){ $('hist-ovl').classList.remove('show'); }
+
+    /* ---------- LPN handling-unit label (Code 128 of the LPN id + carried genealogy) ---------- */
+    function printPlateLabel(id){
+      const l = lpnById(id); if (!l){ alert('Plate not found.'); return; }
+      const p = DB.products.find(x=>x.id===l.product)||{};
+      const tr = p.track||{};
+      printLabels([ labelHTML({ title:'LPN · HANDLING UNIT', code:l.id, lines:[
+        { k:'Product', v:prodName(l.product) },
+        { k:'Qty', v:`${l.qty} ${p.uom||''}` },
+        { k:'Client', v:dbName('clients',l.client) },
+        ...(tr.lot && l.lot ? [{ k:'Lot', v:l.lot }] : []),
+        ...(tr.expiry && l.expiry ? [{ k:'Expiry', v:l.expiry }] : []),
+        { k:'Location', v:locName(l.loc) },
+      ]}) ], 'Plate label · '+l.id);
+    }
+
+    /* ---------- view helpers ---------- */
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ---------- init ---------- */
+    $('f-site').innerHTML   = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-status').value = state.status;
+    $('bulk-status').addEventListener('change', fillReasons);
+    fillReasons();
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; sel.clear(); renderList(); });
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; renderList(); });
+    $('f-status').addEventListener('change', e=>{ state.status=e.target.value; renderList(); });
+    $('f-q').addEventListener('input',       e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+
+    renderList();
+  </script>
+</body></html>

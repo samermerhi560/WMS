@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Labels / Reprint — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="gr-labels" data-erp-title="Labels / Reprint"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Goods Reception › Labels / Reprint">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .find-line { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
+      .find-line .grow { flex:1; min-width:240px; }
+      .reprint-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:18px; align-items:start; }
+      @media (max-width:860px){ .reprint-grid { grid-template-columns:1fr; } }
+      .preview-box { background:var(--fill); border:1px dashed var(--line); border-radius:var(--radius); padding:16px; min-height:120px;
+        display:flex; align-items:center; justify-content:center; }
+      .preview-box.empty { color:var(--ink-faint); font-size:13px; text-align:center; }
+      .reprint-row a { cursor:pointer; }
+      .seg-tabs { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+      .seg-tabs button { padding:7px 14px; border:1px solid var(--line); background:var(--white); border-radius:var(--radius);
+        font:inherit; font-size:13px; cursor:pointer; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.02em; }
+      .seg-tabs button.on { background:var(--brand); color:#fff; border-color:var(--brand); }
+      .caveat { font-size:12px; color:var(--ink-soft); background:var(--fill); border:1px solid var(--line-soft);
+        border-radius:var(--radius); padding:9px 12px; }
+
+      /* inline label preview — same look as the printed label (barcode.js LABEL_CSS, trimmed) */
+      .label{ width:62mm; border:1px solid #bbb; border-radius:4px; padding:8px 10px; display:inline-block; vertical-align:top;
+        box-sizing:border-box; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#111; background:#fff; }
+      .label-h{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:#444; margin-bottom:6px; }
+      .label-bc{ text-align:center; }
+      .label-bc svg{ max-width:100%; height:auto; }
+      .label-b{ margin-top:4px; }
+      .label .lt{ font-family:ui-monospace,Menlo,Consolas,monospace; font-weight:700; font-size:13px; }
+      .label .ll{ display:flex; justify-content:space-between; gap:8px; font-size:11px; }
+      .label .lk{ color:#777; text-transform:uppercase; letter-spacing:.03em; }
+      .label .lv{ font-weight:600; text-align:right; }
+    </style>
+
+    <div class="page-head"><h1>Labels / Reprint</h1>
+      <span class="muted" id="lbl-summary" style="align-self:center"></span>
+    </div>
+    <p class="sub">Re-print any LPN or mixed-pallet label straight from the database — the recovery path when the printer was out of paper or the device died before the label came out. <b>Scan / enter</b> a plate or pallet, pick from <b>recent receipts</b>, or open an <b>ASN</b> to reprint everything received against it. Nothing is minted here — labels are regenerated from stock that already exists.</p>
+
+    <div class="panel">
+      <div class="filter-grid">
+        <label class="field"><span>Site</span><select id="f-site"></select></label>
+        <label class="field"><span>Client</span><select id="f-client"></select></label>
+      </div>
+    </div>
+
+    <!-- ===== #1 — scan / pick → reprint ===== -->
+    <div class="panel">
+      <h3 style="margin-top:0">Find a label</h3>
+      <div class="reprint-grid">
+        <div>
+          <div class="find-line">
+            <label class="field grow" style="margin-bottom:0"><span>Scan / enter an LPN or pallet (System ID)</span>
+              <input id="find-scan" placeholder="e.g. LPN-00112  ·  PLT-00001" autocomplete="off"></label>
+            <button class="btn btn-outline" id="find-btn">Find</button>
+          </div>
+          <div id="find-msg" class="caveat" style="display:none;margin-top:10px"></div>
+        </div>
+        <div>
+          <div class="preview-box empty" id="preview">Scan or pick a plate / pallet to preview its label here.</div>
+          <div class="btn-row" style="margin-top:10px;justify-content:flex-end">
+            <button class="btn btn-primary" id="print-btn" disabled>PRINT LABEL</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== #3 recent receipts  ·  #2 by ASN ===== -->
+    <div class="seg-tabs" id="tabs">
+      <button data-tab="recent" class="on">Recent receipts</button>
+      <button data-tab="asn">Reprint from an ASN</button>
+    </div>
+
+    <div id="tab-recent">
+      <p class="caveat">Recently-minted plates &amp; pallets at this site (most recent first) — the <b>battery-off recovery</b>: reopen, find your recent work, reprint. <span id="persist-note"></span></p>
+      <div class="page-head" style="margin:14px 0 6px"><h1 style="font-size:15px">License plates</h1></div>
+      <div class="panel" style="padding:0">
+        <table class="wf"><thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th>Expiry</th><th>Qty</th><th>Location</th><th>Status</th><th></th></tr></thead>
+          <tbody id="recent-lpns"></tbody></table>
+      </div>
+      <div class="page-head" style="margin:16px 0 6px"><h1 style="font-size:15px">Mixed pallets</h1></div>
+      <div class="panel" style="padding:0">
+        <table class="wf"><thead><tr><th>Pallet</th><th>Client</th><th>Contents</th><th>From</th><th>Status</th><th></th></tr></thead>
+          <tbody id="recent-plts"></tbody></table>
+      </div>
+    </div>
+
+    <div id="tab-asn" style="display:none">
+      <div class="panel">
+        <label class="field" style="max-width:420px"><span>Advance Ship Notice</span><select id="asn-pick"></select></label>
+      </div>
+      <div id="asn-result"></div>
+    </div>
+
+  </div>
+
+  <script src="assets/data.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/barcode.js"></script>
+  <script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const idSeq = id => { const m=/(\d+)/.exec(id||''); return m?+m[1]:0; };
+    const state = { site:'S-LYON', client:'all', tab:'recent', spec:null };
+
+    /* ---------- label specs (same engine + content as pwa-gr-lpn.html / the receipt) ---------- */
+    function lpnSpec(l){
+      const p = DB.products.find(x=>x.id===l.product)||{}, t = p.track||{};
+      const lines = [ prodName(l.product), { k:'Client', v:dbName('clients', l.client) }, { k:'Quantity', v:`${l.qty} ${p.uom||''}` } ];
+      if (t.lot)    lines.push({ k:'Lot / batch', v:l.lot||'—' });
+      if (t.expiry) lines.push({ k:'Expiry', v:l.expiry||'—' });
+      lines.push({ k:'Location', v:locName(l.loc) });
+      lines.push({ k:'Status', v:l.status });
+      if (t.serial) lines.push({ k:'Serials', v:(l.serials||[]).join(', ')||'—' });
+      return { title:`LPN · ${l.id}`, code:l.id, lines };
+    }
+    function palletSpec(plt){
+      const tot = palletTotals(plt);
+      const lines = [`Mixed pallet · ${tot.lines} products · ${tot.units} units${plt.asn?' · '+plt.asn:''}`].concat(
+        palletOpenLines(plt).map(ln => ({ k:(DB.products.find(x=>x.id===ln.product)||{}).name || ln.product, v:`${ln.qty} ${(DB.products.find(x=>x.id===ln.product)||{}).uom||''}` })));
+      return { title:`PALLET · ${plt.id}`, code:plt.id, lines };
+    }
+    function showPreview(spec){
+      state.spec = spec;
+      const box = $('preview');
+      box.classList.remove('empty');
+      box.innerHTML = labelHTML(spec);
+      $('print-btn').disabled = false;
+    }
+    function clearPreview(msg){
+      state.spec = null;
+      const box = $('preview'); box.classList.add('empty');
+      box.textContent = msg || 'Scan or pick a plate / pallet to preview its label here.';
+      $('print-btn').disabled = true;
+    }
+
+    /* ---------- #1 — scan / pick ---------- */
+    function doFind(){
+      const raw = $('find-scan').value.trim();
+      const msg = $('find-msg');
+      if (!raw){ msg.style.display='none'; return; }
+      const r = resolveScan(raw);
+      if (r && r.type==='lpn'){ msg.style.display='none'; showPreview(lpnSpec(r.entity)); }
+      else if (r && r.type==='pallet'){ msg.style.display='none'; showPreview(palletSpec(r.entity)); }
+      else if (r){ msg.style.display='block'; msg.innerHTML = `<b>${esc(r.id)}</b> is a ${esc(r.type)}, not a label. Scan an <b>LPN-…</b> or <b>PLT-…</b>.`; clearPreview(); }
+      else { msg.style.display='block'; msg.innerHTML = `No plate or pallet matches <b>${esc(raw)}</b>. Check the id, or find it under “Recent receipts”.`; clearPreview(); }
+    }
+
+    /* ---------- #3 — recent receipts (recency = id descending, scoped to site/client) ---------- */
+    function recentLpns(){
+      return DB.lpns
+        .filter(l => l.site===state.site && (state.client==='all'||l.client===state.client) && (l.qty||0)>0)
+        .sort((a,b)=>idSeq(b.id)-idSeq(a.id)).slice(0,15);
+    }
+    function recentPlts(){
+      return (DB.pallets||[])
+        .filter(p => p.site===state.site && (state.client==='all'||p.client===state.client) && palletOpenLines(p).length)
+        .sort((a,b)=>idSeq(b.id)-idSeq(a.id)).slice(0,10);
+    }
+    function renderRecent(){
+      const lpns = recentLpns();
+      $('recent-lpns').innerHTML = lpns.length ? lpns.map(l => {
+        const p = DB.products.find(x=>x.id===l.product)||{};
+        return `<tr class="reprint-row">
+          <td class="mono">${esc(l.id)}</td>
+          <td>${prodName(l.product)}</td>
+          <td class="mono">${tracksLot(l.product)?(esc(l.lot)||'—'):'<span class="muted">n/a</span>'}</td>
+          <td>${tracksExpiry(l.product)?(esc(l.expiry)||'—'):'<span class="muted">n/a</span>'}</td>
+          <td>${l.qty} ${esc(p.uom||'')}</td>
+          <td class="mono">${esc(locName(l.loc))}</td>
+          <td>${statusBadge(l.status)}</td>
+          <td><a data-lpn="${esc(l.id)}">Preview ›</a> · <a data-print-lpn="${esc(l.id)}">Print ⎙</a></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="8" class="muted" style="padding:16px">No license plates at ${dbName('sites',state.site)}.</td></tr>`;
+
+      const plts = recentPlts();
+      $('recent-plts').innerHTML = plts.length ? plts.map(p => {
+        const t = palletTotals(p);
+        return `<tr class="reprint-row">
+          <td class="mono">${esc(p.id)}</td>
+          <td>${dbName('clients', p.client)}</td>
+          <td>${t.lines} product(s) · ${t.units} units${p.asn?` · <span class="mono">${esc(p.asn)}</span>`:''}</td>
+          <td class="mono">${esc(locName(p.loc))}</td>
+          <td>${statusBadge('to-putaway')}</td>
+          <td><a data-plt="${esc(p.id)}">Preview ›</a> · <a data-print-plt="${esc(p.id)}">Print ⎙</a></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="6" class="muted" style="padding:16px">No open mixed pallets at ${dbName('sites',state.site)}.</td></tr>`;
+
+      $('lbl-summary').textContent = `${lpns.length} recent plate(s) · ${plts.length} open pallet(s) at ${dbName('sites',state.site)}`;
+    }
+
+    /* ---------- #2 — reprint from an ASN ---------- */
+    function asnPlates(asnId){
+      const lpnIds = new Set(DB.txns.filter(t => t.type==='receive' && t.ref===asnId && /^LPN-/i.test(t.lpn||'')).map(t=>t.lpn));
+      const lpns = DB.lpns.filter(l => lpnIds.has(l.id));
+      const plts = (DB.pallets||[]).filter(p => p.asn===asnId);
+      return { lpns, plts };
+    }
+    function fillAsnPick(){
+      const asns = DB.asns.filter(a => a.site===state.site && (state.client==='all'||a.client===state.client));
+      $('asn-pick').innerHTML = `<option value="">— select an ASN —</option>` +
+        asns.map(a => `<option value="${a.id}">${a.id} · ${dbName('clients',a.client)} · ${asnStatus(a)}</option>`).join('');
+    }
+    function renderAsnResult(){
+      const id = $('asn-pick').value, box = $('asn-result');
+      if (!id){ box.innerHTML = `<p class="caveat">Pick an ASN to list the plates &amp; pallets received against it — each one reprintable. Directly serves “don’t lose the latest ASNs”.</p>`; return; }
+      const { lpns, plts } = asnPlates(id);
+      const lpnRows = lpns.map(l => {
+        const p = DB.products.find(x=>x.id===l.product)||{};
+        return `<tr class="reprint-row"><td class="mono">${esc(l.id)}</td><td>${prodName(l.product)}</td>
+          <td class="mono">${tracksLot(l.product)?(esc(l.lot)||'—'):'<span class="muted">n/a</span>'}</td>
+          <td>${l.qty} ${esc(p.uom||'')}</td><td>${statusBadge(l.status)}</td>
+          <td><a data-lpn="${esc(l.id)}">Preview ›</a> · <a data-print-lpn="${esc(l.id)}">Print ⎙</a></td></tr>`;
+      }).join('');
+      const pltRows = plts.map(p => { const t=palletTotals(p); return `<tr class="reprint-row"><td class="mono">${esc(p.id)}</td>
+          <td>mixed pallet · ${t.lines} product(s) · ${t.units} units</td><td class="mono">${esc(locName(p.loc))}</td><td>${statusBadge('to-putaway')}</td>
+          <td><a data-plt="${esc(p.id)}">Preview ›</a> · <a data-print-plt="${esc(p.id)}">Print ⎙</a></td></tr>`; }).join('');
+      const total = lpns.length + plts.length;
+      box.innerHTML = `<div class="caveat" style="margin-bottom:12px">${total
+          ? `<b>${total}</b> handling unit(s) recorded against <b>${esc(id)}</b> in this session.`
+          : `No plates recorded against <b>${esc(id)}</b> in the current session. Receive against it on the <a href="erp-gr-receipt.html?asn=${encodeURIComponent(id)}">Receive</a> screen, then reprint here.`}</div>`
+        + (lpns.length ? `<div class="panel" style="padding:0;margin-bottom:12px"><table class="wf"><thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th>Qty</th><th>Status</th><th></th></tr></thead><tbody>${lpnRows}</tbody></table></div>` : '')
+        + (plts.length ? `<div class="panel" style="padding:0"><table class="wf"><thead><tr><th>Pallet</th><th>Contents</th><th>From</th><th>Status</th><th></th></tr></thead><tbody>${pltRows}</tbody></table></div>` : '');
+    }
+
+    /* ---------- delegated clicks (preview / print from any list) ---------- */
+    function printLpn(id){ const l=DB.lpns.find(x=>x.id===id); if(l) printLabels([labelHTML(lpnSpec(l))], 'LPN '+id); }
+    function printPlt(id){ const p=palletById(id); if(p) printLabels([labelHTML(palletSpec(p))], 'Pallet '+id); }
+    document.addEventListener('click', e => {
+      const a = e.target.closest('[data-lpn],[data-plt],[data-print-lpn],[data-print-plt]'); if (!a) return;
+      e.preventDefault();
+      if (a.dataset.lpn)        { const l=DB.lpns.find(x=>x.id===a.dataset.lpn); if(l){ showPreview(lpnSpec(l)); window.scrollTo(0,0);} }
+      else if (a.dataset.plt)   { const p=palletById(a.dataset.plt); if(p){ showPreview(palletSpec(p)); window.scrollTo(0,0);} }
+      else if (a.dataset.printLpn) printLpn(a.dataset.printLpn);
+      else if (a.dataset.printPlt) printPlt(a.dataset.printPlt);
+    });
+
+    /* ---------- tabs + filters + init ---------- */
+    function showTab(t){
+      state.tab = t;
+      document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===t));
+      $('tab-recent').style.display = t==='recent' ? '' : 'none';
+      $('tab-asn').style.display    = t==='asn'    ? '' : 'none';
+      if (t==='asn'){ fillAsnPick(); renderAsnResult(); } else renderRecent();
+    }
+    document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+    $('find-btn').addEventListener('click', doFind);
+    $('find-scan').addEventListener('change', doFind);
+    $('print-btn').addEventListener('click', () => { if (state.spec) printLabels([labelHTML(state.spec)], state.spec.title); });
+    $('asn-pick').addEventListener('change', renderAsnResult);
+
+    $('f-site').innerHTML   = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-site').addEventListener('change',   e => { state.site=e.target.value;   refresh(); });
+    $('f-client').addEventListener('change', e => { state.client=e.target.value; refresh(); });
+    function refresh(){ if (state.tab==='asn'){ fillAsnPick(); renderAsnResult(); } else renderRecent(); }
+
+    $('persist-note').textContent = 'Mock note: ERP edits reset on reload; in production this list is served from the server DB and always persists.';
+    renderRecent();
+  </script>
+</body></html>

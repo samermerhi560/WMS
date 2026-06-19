@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Count — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Count" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <!-- screen-local styling MUST live inside #page-content (the shell rebuilds body from it only) -->
+    <style>
+      .var-pos { color:#235c25; font-weight:700; } .var-neg { color:#b03030; font-weight:700; } .var-zero { color:var(--ink-faint); }
+      .cnt-row { display:flex; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid var(--line-soft); }
+      .cnt-row:last-child { border-bottom:none; }
+      .cnt-row .who { flex:1; min-width:0; } .cnt-row .who b { display:block; font-size:13px; }
+      .cnt-row .who small { color:var(--ink-soft); }
+      .cnt-row input.cq { width:74px; text-align:right; }
+      .cnt-row .sysq { font-size:12px; color:var(--ink-faint); white-space:nowrap; }
+      .tag { font-size:10px; padding:1px 6px; border-radius:9px; border:1px solid var(--line); white-space:nowrap; }
+      .tag.found { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.miss  { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .tag.ok    { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .miss-link { font-size:12px; white-space:nowrap; }
+      .found-grid { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
+      .found-grid .field { margin-bottom:0; }
+    </style>
+    <div id="cnt-flash" class="sb-msg" style="display:none"></div>
+    <div id="cnt"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('cnt');
+    const TODAY = '2026-06-15';                       // mocked "today" (matches the other PWA screens)
+    const site = () => PWA.ctx.siteId;
+    const uomOf = pid => prodUom(pid) || '';
+    // S = the live screen state. A count SHEET (S.sheet) accumulates one or many location groups, then submits
+    // as ONE pending-approval sheet — exactly the shape the ERP Count Approval screen reads.
+    //   S.sheet  = committed groups: [{ loc, lines:[{lpn,product,lot,systemQty,countedQty,found?}] }]
+    //   S.lines  = the working rows while counting ONE location (countedQty editable; '' = not yet keyed)
+    const S = { view:'list', tab:'count', sheetId:'', sheet:[], loc:null, lines:[], editIdx:-1, blind:false,
+                viewId:null, last:null, banner:null };
+
+    function flash(t){ const m=$('cnt-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('cnt-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('cnt-flash'); if(m) m.style.display='none'; }
+
+    function nextCountId(){ let n=9000; DB.counts.forEach(c=>{ const m=/CNT-(\d+)/.exec(c.id); if(m) n=Math.max(n,+m[1]); }); return 'CNT-'+(n+1); }
+    function newSheet(){ S.sheet=[]; S.sheetId=nextCountId(); }
+
+    /* ---------- variance helpers (a line with no system LPN = found; counted 0 = missing) ---------- */
+    const lineVar  = l => (l.countedQty===''||l.countedQty==null? (l.found?0:l.systemQty) : l.countedQty) - (l.systemQty||0);
+    const groupNet = g => (g.lines||[]).reduce((s,l)=>s+lineVar(l),0);
+    const sheetNet = () => S.sheet.reduce((s,g)=>s+groupNet(g),0);
+    const sheetPlates = () => S.sheet.reduce((s,g)=>s+(g.lines||[]).length,0);
+    const varCell = v => v>0?`<span class="var-pos">+${v}</span>`:v<0?`<span class="var-neg">${v}</span>`:`<span class="var-zero">0</span>`;
+    const cBadge = s => `<span class="badge ${s==='approved'?'b-available':s==='rejected'?'b-cancelled':'b-toputaway'}">${esc(s.replace('-',' '))}</span>`;
+    // Physically-present, countable plates at a bin (qty>0, this site, not in-transit — same scope as the ERP count).
+    function countablePlatesAt(loc){ return lpnsAtLoc(loc).filter(l=>l.site===site() && l.status!=='in-transit'); }
+    function productOpts(sel){ return `<option value="">— product —</option>`+DB.products.map(p=>`<option value="${p.id}"${p.id===sel?' selected':''}>${esc(p.name)} (${esc(p.sku)})</option>`).join(''); }
+
+    /* ---------- tabs: Count · Submitted ---------- */
+    function tabsHtml(){
+      return `<div class="tabs">
+        <a href="#" id="t-count" class="${S.tab!=='submitted'?'active':''}">Count</a>
+        <a href="#" id="t-sub" class="${S.tab==='submitted'?'active':''}">Submitted</a></div>`;
+    }
+    function wireTabs(){
+      const c=$('t-count'), s=$('t-sub');
+      if(c) c.onclick=e=>{ e.preventDefault(); S.tab='count'; render(); };
+      if(s) s.onclick=e=>{ e.preventDefault(); S.tab='submitted'; render(); };
+    }
+    function renderList(){ if (S.tab==='submitted') return renderSubmitted(); renderCount(); }
+
+    /* ---------- COUNT tab — scan a bin to count + the in-progress sheet ---------- */
+    function renderCount(){
+      const groups = S.sheet.map((g,i)=>{
+        const net=groupNet(g);
+        return `<div class="task" data-grp="${i}"><span class="meta"><b>${esc(locName(g.loc))}</b>
+          <small>${(g.lines||[]).length} plate(s) · net ${net>0?'+':''}${net}</small></span>
+          <span class="badge b-available">edit</span></div>`;
+      }).join('');
+      const sheetPanel = S.sheet.length ? `
+        <div class="panel" style="margin-bottom:10px;background:var(--fill)">
+          <b>Count sheet ${esc(S.sheetId)}</b> <span class="badge b-toputaway">in progress</span>
+          <div class="muted" style="margin:4px 0 8px">${S.sheet.length} location(s) · ${sheetPlates()} plate(s) · net variance ${varCell(sheetNet())}</div>
+          ${groups}
+          <div style="margin:8px 0">${photoField({ ref:S.sheetId, level:'header', title:'Count evidence (optional)' })}</div>
+          <div style="margin:8px 0">${noteField({ ref:S.sheetId, level:'header', title:'Count notes (optional)' })}</div>
+          <button class="btn btn-primary" id="cnt-submit" style="width:100%;margin-top:6px">Submit count sheet (${S.sheet.length} loc)</button>
+          <button class="btn btn-outline btn-sm" id="cnt-discard" style="width:100%">Discard sheet</button>
+        </div>` : '';
+      root.innerHTML = tabsHtml()
+        + PWAScan.field({ id:'sf-loc', prompt:'Scan a location to count', autofocus:true, placeholder:'1-A-01-R1-B01 · LOC-A0101',
+            kinds:['location'], list:storageBins().map(b=>({value:b.id,label:b.structured||b.id,sub:'Area '+(b.area||'—')})), onScan:onScanLoc })
+        + (S.sheet.length?'':`<p class="scan-hint" style="text-align:left">Scan or pick a bin — its plates load for counting. Count one bin or many into one sheet, then submit for approval.</p>`)
+        + sheetPanel;
+      wireTabs();
+      const sub=$('cnt-submit'); if(sub) sub.onclick=submitSheet;
+      const dis=$('cnt-discard'); if(dis) dis.onclick=()=>{ if(window.confirm('Discard this count sheet? Counted figures on it are lost.')){ newSheet(); render(); } };
+      root.querySelectorAll('[data-grp]').forEach(el=>el.onclick=()=>openLoc(S.sheet[+el.dataset.grp].loc));
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    const storageBins = () => DB.locations.filter(b=>b.type==='storage' && b.site===site() && b.status==='active');
+    function onScanLoc(code, r){
+      if (r && r.type==='location'){ const L=r.entity;
+        if (L.site!==site()) return flash(`${locName(L.id)} is at another site.`);
+        if (L.type!=='storage') return flash('Cycle counts run on storage bins. Scan a storage location.');
+        openLoc(L.id);
+      } else flash('Scan a storage location (its bin code or LOC-… id).');
+    }
+
+    /* ---------- SUBMITTED tab — recent count sheets at this site (tap to view) ---------- */
+    function siteCounts(){ return DB.counts.filter(c=>c.site===site() && (!PWA.mineOnly() || isMine(c)))
+        .sort((a,b)=> String(b.created).localeCompare(String(a.created)) || String(b.id).localeCompare(String(a.id))).slice(0,25); }
+    function renderSubmitted(){
+      const list=siteCounts();
+      const cards = list.length ? list.map(c=>{
+        const locs=c.locations||[], plates=locs.reduce((s,g)=>s+(g.lines||[]).length,0);
+        const net=locs.flatMap(g=>g.lines||[]).reduce((s,l)=>s+((l.countedQty||0)-(l.systemQty||0)),0);
+        const where = locs.length===1?locName(locs[0].loc):`${locs.length} locations`;
+        // Assignee row: who the count sheet is dispatched to + a self-claim / release control.
+        const who   = c.assignee ? `${esc(assigneeName(c.assignee))}${isMine(c)?' · me':''}` : '<span class="muted">Any</span>';
+        const claim = c.assignee
+          ? (isMine(c) ? ` · <a href="#" class="claim-btn" data-rel="${c.id}">Release</a>` : '')
+          : ` · <a href="#" class="claim-btn" data-claim="${c.id}">Claim</a>`;
+        return `<div class="task" data-cid="${esc(c.id)}"><span class="meta"><b>${esc(c.id)}</b>
+          <small>${esc(where)} · ${plates} plate(s) · net ${net>0?'+':''}${net}${c.created?' · '+esc(c.created):''}</small>
+          <small style="margin-top:3px">👤 ${who}${claim}</small></span>
+          ${cBadge(c.status)}</div>`;
+      }).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No count sheets at ${esc(PWA.siteName())}${PWA.mineOnly()?' assigned to you — switch to <b>All</b> above to see every sheet':''} yet.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Count sheets at ${esc(PWA.siteName())} (${list.length})</p>${cards}`
+        + (list.length?`<p class="scan-hint" style="text-align:left">Tap a sheet to view it. A supervisor approves on the ERP to correct stock.</p>`:'');
+      wireTabs();
+      root.querySelectorAll('[data-cid]').forEach(el=>el.onclick=()=>{ S.viewId=el.dataset.cid; S.view='view'; render(); });
+      // self-claim / release — stop the click bubbling to the card's view-open
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{
+        ev.preventDefault(); ev.stopPropagation();
+        const rec = DB.counts.find(x=>x.id===(el.dataset.claim||el.dataset.rel)); if(!rec) return;
+        rec.assignee = el.dataset.claim ? DB.currentUserId : '';
+        PWA.save(); renderSubmitted();
+      });
+    }
+
+    /* ---------- COUNT one location (confirm plates · key counts · found via scan · missing = 0) ---------- */
+    function openLoc(locId){
+      S.loc=locId; S.editIdx=S.sheet.findIndex(g=>g.loc===locId);
+      if (S.editIdx>=0){                               // re-open an already-counted location to edit
+        S.lines = (S.sheet[S.editIdx].lines||[]).map(l=>({ lpn:l.lpn||'', product:l.product, lot:l.lot||'',
+          systemQty:l.systemQty||0, countedQty:(l.countedQty==null?'':l.countedQty), found:!!l.found, scanned:true }));
+      } else {
+        S.lines = countablePlatesAt(locId).map(l=>({ lpn:l.id, product:l.product, lot:l.lot||'',
+          systemQty:l.qty, countedQty:(S.blind?'':l.qty), found:false, scanned:false }));
+      }
+      S.view='loc'; render();
+    }
+    function renderLoc(){
+      const loc=DB.locations.find(x=>x.id===S.loc)||{};
+      const blind=S.blind;
+      const rows = S.lines.map((l,i)=>{
+        const v=lineVar(l), miss=(!l.found && (l.countedQty===0));
+        if (l.found){
+          return `<div class="cnt-row"><span class="tag found">found</span>
+            <span class="who"><select data-fp="${i}" style="max-width:180px">${productOpts(l.product)}</select>
+              ${tracksLot(l.product)?`<input data-fl="${i}" value="${esc(l.lot||'')}" placeholder="lot" style="width:96px;margin-top:4px">`:''}
+              ${l.foreign?`<small>scanned ${esc(l.foreign)} — not expected here</small>`:''}</span>
+            <input class="cq" data-cq="${i}" type="number" min="1" step="1" value="${l.countedQty}" placeholder="qty">
+            <a href="#" class="miss-link" data-rm="${i}" title="remove">✕</a></div>`;
+        }
+        return `<div class="cnt-row">${l.scanned?'<span class="tag ok">✓</span>':''}
+          <span class="who"><b>${esc(prodName(l.product))}</b>
+            <small>${esc(l.lpn)}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''}${blind?'':` · system ${l.systemQty} ${esc(uomOf(l.product))}`}${(!blind&&v!==0)?' · '+(v>0?'+'+v:v):''}${miss?' ':''}</small>
+            ${miss?'<span class="tag miss" style="margin-top:3px;display:inline-block">missing</span>':''}</span>
+          ${blind?'':`<span class="sysq">/ ${l.systemQty}</span>`}
+          <input class="cq" data-cq="${i}" type="number" min="0" step="1" value="${l.countedQty}" placeholder="count">
+          <a href="#" class="miss-link" data-miss="${i}">0</a></div>`;
+      }).join('') || `<p class="scan-hint" style="text-align:left">No system stock here. Scan/add any plate physically present as “found”, or this bin is empty.</p>`;
+      const net=groupNet({lines:S.lines});
+      const canAdd = S.lines.length>0;
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b>${esc(loc.structured||S.loc)}</b>${loc.area?' <span class="muted">· Area '+esc(loc.area)+'</span>':''}
+          <div class="muted" style="margin-top:4px">${S.lines.filter(l=>!l.found).length} system plate(s)${S.editIdx>=0?' · editing on sheet '+esc(S.sheetId):''}</div>
+          <label style="display:flex;align-items:center;gap:7px;margin-top:8px;font-size:13px"><input type="checkbox" id="cnt-blind" ${blind?'checked':''} style="width:auto;margin:0"> Blind count (hide system qty)</label></div>
+        ${PWAScan.field({ id:'sf-item', prompt:'Scan each plate to confirm — or scan an item that’s here but not listed', placeholder:'LPN-00008 · product barcode',
+            kinds:['lpn','product'], list:S.lines.filter(l=>!l.found&&l.lpn).map(l=>({value:l.lpn,label:l.lpn,sub:prodName(l.product)})), onScan:onScanItem })}
+        <div class="panel" style="margin:8px 0;padding:4px 12px">${rows}</div>
+        <button class="btn btn-outline btn-sm" id="cnt-add-found" style="width:100%">+ Found plate (physically here, not in the system)</button>
+        ${blind?'':`<div class="muted" style="margin:6px 2px;font-size:12px">net variance here ${varCell(net)}</div>`}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="cnt-save" style="width:100%"${canAdd?'':' disabled'}>${S.editIdx>=0?'Update location on sheet':'Add location to count sheet'}</button>
+        <button class="btn btn-outline" id="cnt-cancel" style="width:100%">‹ Cancel</button>`;
+      // wiring
+      const bl=$('cnt-blind'); if(bl) bl.onchange=()=>toggleBlind(bl.checked);
+      root.querySelectorAll('[data-cq]').forEach(inp=>inp.oninput=()=>setCount(+inp.dataset.cq, inp.value));
+      root.querySelectorAll('[data-miss]').forEach(a=>a.onclick=e=>{ e.preventDefault(); setCount(+a.dataset.miss,'0'); render(); });
+      root.querySelectorAll('[data-rm]').forEach(a=>a.onclick=e=>{ e.preventDefault(); S.lines.splice(+a.dataset.rm,1); render(); });
+      root.querySelectorAll('[data-fp]').forEach(sel=>sel.onchange=()=>{ S.lines[+sel.dataset.fp].product=sel.value; render(); });
+      root.querySelectorAll('[data-fl]').forEach(inp=>inp.oninput=()=>{ S.lines[+inp.dataset.fl].lot=inp.value; });
+      $('cnt-add-found').onclick=()=>{ S.lines.push({ lpn:'', product:'', lot:'', systemQty:0, countedQty:'', found:true, scanned:true }); render(); };
+      $('cnt-save').onclick=saveLoc;
+      $('cnt-cancel').onclick=()=>{ S.view='list'; S.tab='count'; S.loc=null; S.lines=[]; S.editIdx=-1; render(); };
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function setCount(i,val){ const l=S.lines[i]; if(!l) return; l.countedQty = val===''?'':Math.max(0,parseInt(val,10)||0); if(!l.found) l.scanned=true; }
+    function toggleBlind(on){ S.blind=!!on; S.lines.forEach(l=>{ if(!l.found) l.countedQty = S.blind?'':l.systemQty; }); render(); }
+    function onScanItem(code, r){
+      if (r && r.type==='lpn'){ const L=r.entity;
+        const sys=S.lines.find(l=>!l.found && l.lpn===L.id);
+        if (sys){ sys.scanned=true; if(!S.blind && sys.countedQty==='') sys.countedQty=sys.systemQty; render(); ok(`${L.id} confirmed.`); return; }
+        addFound(L.product, L.id); ok(`${L.id} added as found — not expected at ${locName(S.loc)}.`); return;
+      }
+      if (r && r.type==='product'){
+        const sys=S.lines.find(l=>!l.found && l.product===r.id && !l.scanned);
+        if (sys){ sys.scanned=true; if(!S.blind && sys.countedQty==='') sys.countedQty=sys.systemQty; render(); ok(`${prodName(r.id)} confirmed.`); return; }
+        addFound(r.id, ''); ok(`${prodName(r.id)} added as found.`); return;
+      }
+      flash('Scan a plate (LPN-…) or a product barcode.');
+    }
+    function addFound(pid, foreign){ S.lines.push({ lpn:'', product:pid||'', lot:'', systemQty:0, countedQty:'', found:true, scanned:true, foreign:foreign||'' }); render(); }
+    function saveLoc(){
+      if(!S.lines.length) return flash('Nothing to count here — scan another bin or add a found plate.');
+      for(const l of S.lines){ if(l.found){
+        if(!l.product) return flash('Pick a product for each found plate (or remove it).');
+        if(!(parseInt(l.countedQty,10)>0)) return flash('Enter a quantity (>0) for each found plate.'); } }
+      if(S.blind){ for(const l of S.lines){ if(!l.found && (l.countedQty===''||l.countedQty==null)) return flash('Blind count — enter a count for every plate (use 0 for a missing plate).'); } }
+      const lines = S.lines.map(l=>{
+        let cq=l.countedQty; if(cq===''||cq==null) cq = l.found?0:l.systemQty;
+        const row={ lpn:l.found?'':l.lpn, product:l.product, lot:l.lot||'', systemQty:l.found?0:l.systemQty, countedQty:Math.max(0,parseInt(cq,10)||0) };
+        if(l.found) row.found=true; return row;
+      });
+      const group={ loc:S.loc, lines };
+      if(S.editIdx>=0) S.sheet[S.editIdx]=group; else S.sheet.push(group);
+      const editing=S.editIdx>=0;
+      S.view='list'; S.tab='count'; S.loc=null; S.lines=[]; S.editIdx=-1;
+      S.banner = `${locName(group.loc)} ${editing?'updated':'added'} — ${lines.length} plate(s). ${S.sheet.length} location(s) on sheet ${S.sheetId}.`;
+      render();
+    }
+
+    /* ---------- SUBMIT — create one pending-approval count sheet (the ERP corrects stock on approval) ---------- */
+    function submitSheet(){
+      if(!S.sheet.length) return flash('Add at least one location to the count sheet.');
+      const c={ id:S.sheetId, site:site(), status:'pending-approval', created:TODAY,
+        countedBy:PWA.user, countedDate:TODAY, locations:S.sheet.map(g=>({ loc:g.loc, lines:g.lines.map(l=>Object.assign({},l)) })) };
+      DB.counts.push(c); PWA.save();
+      S.last = { id:c.id, locs:c.locations.length, plates:c.locations.reduce((s,g)=>s+g.lines.length,0),
+                 net:c.locations.flatMap(g=>g.lines).reduce((s,l)=>s+((l.countedQty||0)-(l.systemQty||0)),0),
+                 disc:c.locations.flatMap(g=>g.lines).filter(l=>(l.countedQty||0)!==(l.systemQty||0)).length };
+      newSheet();                                       // mint a fresh sheet id for the next count
+      S.view='done'; render();
+    }
+    function renderDone(){
+      const L=S.last||{};
+      root.innerHTML = `
+        <div class="success"><div class="check">✓</div>
+          <p><b>${esc(L.id)}</b> submitted — ${L.locs} location(s), ${L.plates} plate(s).</p></div>
+        <div class="panel" style="margin:10px 0">
+          <div class="muted">Status <span class="badge b-toputaway">pending approval</span></div>
+          <div class="muted" style="margin-top:6px">${L.disc?`<b>${L.disc}</b> discrepanc${L.disc===1?'y':'ies'} · net ${L.net>0?'+':''}${L.net}`:'No discrepancies — count confirms stock.'}</div>
+          <div class="muted" style="margin-top:6px;font-size:12px">A supervisor approves on the ERP (Inventory Ops › Count Approval) to correct stock to the counted figures.</div></div>
+        <button class="btn btn-primary" id="dn-more" style="width:100%">Count another location</button>
+        <button class="btn btn-outline" id="dn-sub" style="width:100%">View submitted</button>
+        <button class="btn btn-outline" id="dn-home" style="width:100%">Home</button>`;
+      $('dn-more').onclick=()=>{ S.view='list'; S.tab='count'; S.last=null; render(); };
+      $('dn-sub').onclick=()=>{ S.view='list'; S.tab='submitted'; S.last=null; render(); };
+      $('dn-home').onclick=()=>{ location.href='pwa-home.html'; };
+    }
+
+    /* ---------- read-only view of a submitted sheet ---------- */
+    function renderView(){
+      const c=DB.counts.find(x=>x.id===S.viewId); if(!c){ S.view='list'; S.tab='submitted'; return render(); }
+      const locs=c.locations||[];
+      const body = locs.map(g=>{
+        const loc=DB.locations.find(x=>x.id===g.loc)||{}, net=(g.lines||[]).reduce((s,l)=>s+((l.countedQty||0)-(l.systemQty||0)),0);
+        const rows=(g.lines||[]).map(l=>{ const d=(l.countedQty||0)-(l.systemQty||0);
+          const tag=(!l.lpn||l.found)?' <span class="tag found">found</span>':(l.countedQty===0&&l.systemQty>0)?' <span class="tag miss">missing</span>':'';
+          return `<div class="cnt-row"><span class="who"><b>${esc(prodName(l.product))}</b>${tag}
+            <small>${l.lpn?esc(l.lpn):'—'}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''} · system ${l.systemQty} · counted ${l.countedQty}</small></span>
+            <span class="sysq">${varCell(d)}</span></div>`; }).join('');
+        return `<div class="panel" style="margin-bottom:8px"><b>${esc(loc.structured||g.loc)}</b>${loc.area?' <span class="muted">· Area '+esc(loc.area)+'</span>':''} <span style="float:right">${varCell(net)}</span><div style="margin-top:4px">${rows}</div></div>`;
+      }).join('');
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(c.id)}</b> ${cBadge(c.status)}
+          <div class="muted" style="margin-top:4px">${locs.length} location(s) · counted by ${esc(c.countedBy||'—')}${c.created?' · '+esc(c.created):''}</div>
+          ${c.status==='approved'?`<div class="muted">Approved ${esc(c.approved||'')} — stock corrected to counted figures.</div>`:c.status==='rejected'?`<div class="muted">Rejected — stock unchanged; recount required.</div>`:`<div class="muted">Awaiting supervisor approval on the ERP.</div>`}
+          <div style="margin-top:8px">${photoField({ ref:c.id, level:'header', title:'Count evidence', readonly:true })}</div>
+          <div style="margin-top:6px">${noteField({ ref:c.id, level:'header', title:'Count notes', readonly:true })}</div></div>
+        ${body}
+        <button class="btn btn-outline" id="vw-back" style="width:100%">‹ Back to submitted</button>`;
+      $('vw-back').onclick=()=>{ S.viewId=null; S.view='list'; S.tab='submitted'; render(); };
+    }
+
+    /* ---------- dispatch ---------- */
+    function render(){
+      flashClear();
+      ({ list:renderList, loc:renderLoc, done:renderDone, view:renderView }[S.view] || renderList)();
+      if (S.view==='list' && S.banner){ ok(S.banner); S.banner=null; }
+    }
+    newSheet();
+    // deep link: ?loc=LOC-A0101 starts a sheet and opens that bin for counting (mirrors the ERP ?loc= hand-off)
+    const dl=new URLSearchParams(location.search).get('loc'); const L=dl&&DB.locations.find(x=>x.id===dl);
+    if (L && L.site===site() && L.type==='storage') openLoc(L.id);
+    else render();
+  })();
+  </script>
+</body>
+</html>

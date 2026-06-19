@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inspection — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Inspection" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <style>
+      .seg2 { display:flex; gap:8px; margin:6px 0 10px; }
+      .seg2 button { flex:1; padding:13px 6px; border:1px solid var(--line); background:var(--white);
+        border-radius:var(--radius); font:inherit; font-weight:600; cursor:pointer; color:var(--ink-soft); }
+      .seg2 button.on-pass { background:var(--ok);  color:#fff; border-color:var(--ok); }
+      .seg2 button.on-fail { background:var(--bad); color:#fff; border-color:var(--bad); }
+    </style>
+    <div id="insp-flash" class="sb-msg" style="display:none"></div>
+    <div id="insp"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('insp');
+    // Reject-reason list follows the chosen disposition, pulled live from Master Data › Reason Codes
+    // (the 'status' domain — reasons linked to the target status). preserve = keep the current pick if still valid.
+    function fillReasons(preserve){
+      const dispEl=$('d-disp'), sel=$('d-reason'); if(!dispEl||!sel) return;
+      const prev = preserve ? sel.value : '';
+      sel.innerHTML = ['<option value="">— select —</option>']
+        .concat(reasonsFor('status', dispEl.value).map(r=>`<option${r===prev?' selected':''}>${esc(r)}</option>`)).join('');
+    }
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const S = { view:'list', lpn:null, acc:null };   // acc = accepted quantity (default = full); rejected = qty - acc
+
+    function flash(t){ const m=$('insp-flash'); if(m){ m.textContent=t; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('insp-flash'); if(m){ m.style.display='none'; } }
+    const pending = () => DB.lpns.filter(l => l.status==='to-inspect' && l.site===site() && l.client===client() && (!PWA.mineOnly() || isMine(l)));
+
+    /* ---------- LIST ---------- */
+    function renderList(){
+      const list = pending();
+      const cards = list.length ? list.map(l => {
+        // Assignee row + self-claim / release (role-gated in the coding phase).
+        const who   = l.assignee ? esc(assigneeName(l.assignee))+(isMine(l)?' · me':'') : '<span class="muted">Any</span>';
+        const claim = l.assignee ? (isMine(l) ? ` · <a href="#" class="claim-btn" data-rel="${l.id}">Release</a>` : '') : ` · <a href="#" class="claim-btn" data-claim="${l.id}">Claim</a>`;
+        return `<div class="task" data-lpn="${l.id}"><span class="meta"><b>${esc(l.id)}</b>
+          <small>${esc(prodName(l.product))}${l.lot?' · lot '+esc(l.lot):''}${l.expiry?' · exp '+esc(l.expiry):''}</small>
+          <small style="margin-top:3px">👤 ${who}${claim}</small></span>
+          <span class="badge b-toputaway">${l.qty} ${esc(prodUom(l.product))}</span></div>`;
+      }).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">Nothing awaiting inspection at ${esc(PWA.siteName())}${PWA.mineOnly()?' assigned to you — switch to <b>All</b> above':''}.</p></div>`;
+      root.innerHTML =
+        PWAScan.field({ id:'sf-insp', prompt:'Scan an LPN to inspect', autofocus:true, placeholder:'LPN-00014',
+          kinds:['lpn'], list:list.map(l=>({value:l.id,label:l.id,sub:prodName(l.product)})), onScan:onScan })
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Awaiting inspection (${list.length})</p>${cards}`;
+      root.querySelectorAll('[data-lpn]').forEach(el => el.onclick = () => openDetail(el.dataset.lpn));
+      // self-claim / release — stop the click bubbling to the card's openDetail
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{ ev.preventDefault(); ev.stopPropagation();
+        const rec = lpnById(el.dataset.claim||el.dataset.rel); if(!rec) return;
+        rec.assignee = el.dataset.claim ? DB.currentUserId : ''; PWA.save(); render(); });
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScan(code, r){
+      if (r && r.type==='lpn'){
+        const l = r.entity;
+        if (l.status!=='to-inspect') return flash(`${l.id} is not awaiting inspection (status: ${l.status}).`);
+        if (l.site!==site() || l.client!==client()) return flash(`${l.id} belongs to another client/site.`);
+        openDetail(l.id);
+      } else flash('Scan a license-plate (LPN-…).');
+    }
+
+    /* ---------- DETAIL ---------- */
+    function openDetail(id){ S.lpn=id; S.acc=null; S.view='detail'; render(); }
+    function renderDetail(){
+      const l = DB.lpns.find(x=>x.id===S.lpn); if(!l){ S.view='list'; return render(); }
+      const p = DB.products.find(x=>x.id===l.product)||{};
+      const serial = !!(p.track&&p.track.serial);
+      if (S.acc==null || S.acc>l.qty || S.acc<0) S.acc = l.qty;   // default: accept the whole plate
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px">
+          <b class="mono">${esc(l.id)}</b> ${statusBadge(l.status)}<br>
+          <div class="muted" style="margin-top:4px">${esc(prodName(l.product))}</div>
+          <div class="muted">${l.qty} ${esc(p.uom||'')}${l.lot?' · lot '+esc(l.lot):''}${l.expiry?' · exp '+esc(l.expiry):''} · @ ${esc(locName(l.loc))}</div>
+          ${serial?`<div class="muted">Serials: ${esc((Array.isArray(l.serials)?l.serials.join(', '):l.serials)||'—')}</div>`:''}
+        </div>
+        <label class="field" style="margin-bottom:2px"><span>Accepted quantity (of ${l.qty})</span>
+          <input id="d-acc" type="number" min="0" max="${l.qty}" step="1" value="${S.acc}"></label>
+        <div class="seg2">
+          <button type="button" id="acc-all">✓ Accept all</button>
+          <button type="button" id="rej-all">✕ Reject all</button>
+        </div>
+        <div class="muted" id="acc-note" style="margin:-2px 0 10px"></div>
+        <div id="d-reject" style="display:none">
+          <label class="field"><span>Rejected disposition <span class="req">*</span></span>
+            <select id="d-disp"><option value="quarantine">Quarantine (QA)</option><option value="hold">Hold</option><option value="damaged">Damaged</option></select></label>
+          <label class="field"><span>Reject reason <span class="req">*</span></span>
+            <select id="d-reason"><option value="">— select —</option></select></label>
+          <div style="margin:6px 0">${photoField({ref:l.id, level:'line', title:'Damage / condition photos (optional)'})}</div>
+          <div style="margin:6px 0">${noteField({ref:l.id, level:'line', title:'Inspection note (optional)'})}</div>
+        </div>
+        <button class="btn btn-primary" id="d-save" style="width:100%">Save inspection</button>
+        <button class="btn btn-outline" id="d-cancel" style="width:100%">‹ Back to worklist</button>`;
+      const accI = $('d-acc');
+      accI.onchange = () => { let v=Math.floor(Number(accI.value)||0); if(v<0)v=0; if(v>l.qty)v=l.qty; accI.value=v; S.acc=v; paintAcc(l); };
+      $('acc-all').onclick = () => { S.acc=l.qty; accI.value=l.qty; paintAcc(l); };
+      $('rej-all').onclick = () => { S.acc=0;    accI.value=0;    paintAcc(l); };
+      $('d-cancel').onclick = () => { S.view='list'; S.acc=null; render(); };
+      $('d-save').onclick = save;
+      $('d-disp').onchange = () => fillReasons(true);   // reasons follow the disposition (master-data driven)
+      fillReasons(false);
+      paintAcc(l);
+    }
+    function paintAcc(l){
+      const p=DB.products.find(x=>x.id===l.product)||{}, u=p.uom||'unit(s)';
+      const rej=l.qty-S.acc, note=$('acc-note');
+      if (note) note.innerHTML = rej===0 ? `Accepting all (<b>${S.acc}</b> ${esc(u)}) → putaway.`
+        : S.acc===0 ? `Rejecting all (<b>${rej}</b> ${esc(u)}) — nothing enters stock.`
+        : `Accept <b>${S.acc}</b> → putaway · reject <b>${rej}</b> ${esc(u)} (won't enter stock).`;
+      const rb=$('d-reject'); if (rb) rb.style.display = rej>0 ? '' : 'none';
+    }
+    function save(){
+      const l = DB.lpns.find(x=>x.id===S.lpn); if(!l) return;
+      if (l.status!=='to-inspect') return flash('This plate is no longer pending inspection.');   // re-check at commit
+      const rej = l.qty - S.acc;
+      let disp='', reason='';
+      if (rej>0){ disp=$('d-disp').value; reason=$('d-reason').value; if(!reason) return flash('A reason is required to reject units.'); }
+      const p=DB.products.find(x=>x.id===l.product)||{}, u=p.uom||'';
+      const res = inspectionSplit(l.id, S.acc, { disposition: disp||'quarantine', reason, user:PWA.user });
+      if (!res) return flash('Could not record — plate no longer pending.');
+      PWA.save();
+      const rejWhere = disp==='hold' ? 'Hold' : `${disp==='damaged'?'Damaged':'Quarantine'} (${locName((lpnById(res.rejectedId)||{}).loc)})`;
+      if (res.rejected===0)      S.banner = `${res.acceptedId} accepted (${res.accepted} ${u}) — released to ${locName(l.loc)}, ready for putaway.`;
+      else if (res.accepted===0) S.banner = `${res.rejectedId} rejected (${res.rejected} ${u}) → ${rejWhere}. Excluded from stock.`;
+      else                       S.banner = `${l.id} split — ${res.accepted} accepted → putaway (${res.acceptedId}); ${res.rejected} rejected → ${rejWhere} (${res.rejectedId}). Rejected won't enter stock.`;
+      S.view='list'; S.acc=null; render();
+    }
+
+    function render(){ flashClear(); if(S.view==='detail') renderDetail(); else { renderList(); if(S.banner){ flash(S.banner); const m=$('insp-flash'); if(m){ m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; } S.banner=null; } } }
+    render();
+  })();
+  </script>
+</body>
+</html>

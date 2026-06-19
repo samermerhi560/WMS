@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UoM & Packaging — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-uom" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › UoM / Packaging">
+  <div id="page-content">
+
+    <!-- LIST VIEW -->
+    <div id="view-list">
+      <div class="page-head"><h1>Units of Measure &amp; Packaging</h1>
+        <div class="acts">
+          <button class="btn btn-outline" onclick="newHierarchy()">New hierarchy</button>
+          <button class="btn btn-outline" onclick="openUnitModal()">New unit</button>
+          <button class="btn" disabled>Export</button>
+        </div></div>
+
+      <div class="tabs">
+        <a href="#" class="active" id="tab-units" onclick="tab('units');return false">Units of measure</a>
+        <a href="#" id="tab-pkg" onclick="tab('pkg');return false">Packaging hierarchies</a>
+      </div>
+
+      <!-- UNITS -->
+      <div id="pane-units">
+        <p class="sub">Units are global — shared by every client. Base counting/weight/volume/length units plus the packaging units used to build hierarchies.</p>
+        <div class="btn-row" style="margin-bottom:10px"><button class="btn btn-sm btn-outline" onclick="openUnitModal()">Add unit</button></div>
+        <div class="panel" style="padding:0">
+          <table class="wf"><thead><tr>
+            <th style="width:28px">⚙</th><th><span class="funnel">▾</span>Code</th>
+            <th><span class="funnel">▾</span>Name</th><th><span class="funnel">▾</span>Category</th>
+            <th><span class="funnel">▾</span>Decimals</th><th><span class="funnel">▾</span>Base unit</th>
+          </tr></thead><tbody id="uom-rows"></tbody></table>
+        </div>
+      </div>
+
+      <!-- PACKAGING -->
+      <div id="pane-pkg" style="display:none">
+        <p class="sub"><b>Shared templates</b> (e.g. Dozen = 12 each) are global, belong to no client, and are <b>authored here</b> — they’re the reusable blueprints. A <b>product’s own</b> packaging is authored on the <a href="erp-md-products.html">Product</a> screen (clone a template, tune factors, add that product’s barcodes); the product rows below are a read-only reference. Each level is relative to the level it’s defined against; factor-to-base is computed.</p>
+        <div class="panel" style="padding:0">
+          <table class="wf"><thead><tr>
+            <th style="width:28px">⚙</th><th><span class="funnel">▾</span>Hierarchy</th>
+            <th><span class="funnel">▾</span>Product</th><th><span class="funnel">▾</span>Base unit</th>
+            <th><span class="funnel">▾</span>Levels</th><th><span class="funnel">▾</span>Top = base</th><th></th>
+          </tr></thead><tbody id="pkg-rows"></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- EDIT VIEW -->
+    <div id="view-edit" style="display:none">
+      <div class="page-head"><h1 id="edit-title">Packaging hierarchy</h1>
+        <div class="acts"><button class="btn btn-primary">Save hierarchy</button>
+          <button class="btn btn-outline" onclick="show('list')">Back</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to UoM &amp; Packaging</a></div>
+
+      <div class="panel">
+        <fieldset><legend>Hierarchy</legend>
+          <label class="field"><span>Hierarchy name <span class="req">*</span></span><input id="e-name" value=""></label>
+          <div class="field-row">
+            <label class="field"><span>Client / scope <span class="req">*</span></span>
+              <select id="e-client" onchange="onClient()"></select></label>
+            <label class="field"><span>Product</span>
+              <select id="e-product" onchange="onProduct()"></select></label>
+            <label class="field"><span>Base unit <span class="req">*</span></span>
+              <select id="e-base" onchange="syncBaseRow()"></select></label>
+          </div>
+          <div class="field-row" id="clone-row">
+            <label class="field"><span>Start from template (optional)</span>
+              <select id="e-template" onchange="cloneTemplate()"></select></label>
+          </div>
+          <p class="wf-note muted" id="base-note" style="margin-top:-4px"></p>
+        </fieldset>
+
+        <fieldset><legend>Pack levels (bottom → up)</legend>
+          <p class="wf-note muted" style="margin-top:0">Each level’s “qty in parent” is how many of the level directly below it. Factor → base is computed automatically.</p>
+          <table class="wf"><thead><tr>
+            <th>#</th><th>Pack level</th><th>UoM</th><th>Qty × defined-against</th>
+            <th>Factor → base</th><th>Barcode</th><th>Notes</th><th></th>
+          </tr></thead><tbody id="lvl-rows"></tbody></table>
+          <div class="spacer"></div><button class="btn btn-sm btn-outline" onclick="openLevelModal()">Add level</button>
+        </fieldset>
+
+        <div id="e-notes" style="margin:10px 0"></div>
+      </div>
+    </div>
+
+  <!-- ADD LEVEL MODAL -->
+  <div id="m-level" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:60;align-items:center;justify-content:center">
+    <div style="background:#fff;border-radius:6px;max-width:460px;width:92%;padding:18px;box-shadow:0 12px 44px rgba(0,0,0,.25)">
+      <h3 style="margin-top:0">Add pack level</h3>
+      <label class="field"><span>Pack level name <span class="req">*</span></span>
+        <input id="ml-name" list="lvl-suggest" placeholder="e.g. Box of 12 (dozen)">
+        <datalist id="lvl-suggest">
+          <option>Six-pack</option><option>Inner pack</option><option>Box of 6</option>
+          <option>Box of 12 (dozen)</option><option>Box of 24</option><option>Carton</option>
+          <option>Case</option><option>Tray</option><option>Layer</option><option>Pallet</option>
+        </datalist></label>
+      <label class="field"><span>UoM <span class="req">*</span></span><select id="ml-uom"></select></label>
+      <div class="field-row">
+        <label class="field"><span>Defined against <span class="req">*</span></span><select id="ml-basis" onchange="levelHint()"></select></label>
+        <label class="field"><span>Qty</span><input id="ml-qty" type="number" value="6" min="1" oninput="levelHint()"></label>
+      </div>
+      <p class="wf-note muted" id="ml-hint" style="margin-top:-6px"></p>
+      <label class="field"><span>Barcode (optional)</span><input id="ml-barcode" placeholder="EAN / GS1"></label>
+      <div class="btn-row" style="justify-content:flex-end">
+        <button class="btn btn-outline" onclick="closeModal('m-level')">Cancel</button>
+        <button class="btn btn-primary" onclick="addLevelConfirm()">Add level</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD UNIT MODAL -->
+  <div id="m-unit" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:60;align-items:center;justify-content:center">
+    <div style="background:#fff;border-radius:6px;max-width:440px;width:92%;padding:18px;box-shadow:0 12px 44px rgba(0,0,0,.25)">
+      <h3 style="margin-top:0">New unit of measure</h3>
+      <p class="wf-note muted" style="margin-top:-6px">Units are global — available to every client.</p>
+      <div class="field-row">
+        <label class="field"><span>Code <span class="req">*</span></span><input id="mu-code" placeholder="e.g. BX36"></label>
+        <label class="field"><span>Name <span class="req">*</span></span><input id="mu-name" placeholder="e.g. Box of 36"></label>
+      </div>
+      <div class="field-row">
+        <label class="field"><span>Category <span class="req">*</span></span>
+          <select id="mu-cat"><option>Count</option><option>Weight</option><option>Volume</option><option>Length</option><option selected>Packaging</option></select></label>
+        <label class="field"><span>Decimals</span>
+          <select id="mu-dec"><option>Whole only</option><option>Allowed</option></select></label>
+      </div>
+      <label class="field"><input id="mu-base" type="checkbox" style="width:auto"> This is a base unit for its category</label>
+      <div class="btn-row" style="justify-content:flex-end">
+        <button class="btn btn-outline" onclick="closeModal('m-unit')">Cancel</button>
+        <button class="btn btn-primary" onclick="addUnitConfirm()">Add unit</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const BASE_UNITS=[['EA','Each'],['VIAL','Vial'],['PC','Piece'],['PR','Pair'],['KG','Kilogram'],['L','Litre'],['M','Metre']];
+    const prodBase={each:'EA',vial:'VIAL'};
+    const isShared=p=>p.shared===true||p.client==='—';
+    let units=JSON.parse(JSON.stringify(DB.uoms));
+    let working=[];
+
+    // ---------- UNITS list ----------
+    function renderUnits(){
+      const cats=['Count','Weight','Volume','Length','Packaging']; let html='';
+      cats.forEach(c=>{
+        const us=units.filter(u=>u.cat===c);
+        html+=`<tr class="group"><td colspan="6">${c} — ${us.length} units</td></tr>`;
+        us.forEach(u=>{ html+=`<tr><td class="dots">⋮</td><td class="mono">${u.code}</td><td>${u.name}</td>
+          <td>${u.cat}</td><td>${u.dec?'allowed':'whole only'}</td>
+          <td>${u.base?'<span class="badge b-available">base</span>':''}</td></tr>`; });
+      });
+      document.getElementById('uom-rows').innerHTML=html;
+    }
+    renderUnits();
+
+    // ---------- PACKAGING list (grouped: shared templates, then per client) ----------
+    function pkgRow(p,i){
+      const top=p.levels[p.levels.length-1];
+      const cloneLink = isShared(p)
+        ? ` &nbsp;·&nbsp; <a href="#" onclick="startClone(${i});return false">Clone to product</a>`
+        : ` &nbsp;·&nbsp; <a href="erp-md-products.html">Edit on product →</a>`;
+      return `<tr><td class="dots">⋮</td>
+        <td><a href="#" onclick="openPkg(${i});return false">${p.name}</a>${cloneLink}</td>
+        <td>${p.product==='—'?'<span class="muted">— (template)</span>':prodName(p.product)}</td>
+        <td>${p.base}</td><td>${p.levels.length}</td><td class="mono">${top.factor}</td>
+        <td></td></tr>`;
+    }
+    function renderPkgList(){
+      let html='';
+      const shared=DB.packagings.map((p,i)=>({p,i})).filter(x=>isShared(x.p));
+      html+=`<tr class="group"><td colspan="7">Shared templates — global, no client (${shared.length})</td></tr>`;
+      shared.forEach(x=>html+=pkgRow(x.p,x.i));
+      DB.clients.forEach(c=>{
+        const own=DB.packagings.map((p,i)=>({p,i})).filter(x=>!isShared(x.p)&&x.p.client===c.id);
+        if(!own.length) return;
+        html+=`<tr class="group"><td colspan="7">${c.name} (${own.length})</td></tr>`;
+        own.forEach(x=>html+=pkgRow(x.p,x.i));
+      });
+      document.getElementById('pkg-rows').innerHTML=html;
+    }
+    renderPkgList();
+
+    function tab(which){
+      document.getElementById('tab-units').classList.toggle('active', which==='units');
+      document.getElementById('tab-pkg').classList.toggle('active', which==='pkg');
+      document.getElementById('pane-units').style.display=which==='units'?'':'none';
+      document.getElementById('pane-pkg').style.display=which==='pkg'?'':'none';
+    }
+
+    // ---------- editor header ----------
+    function fillClients(sel){
+      document.getElementById('e-client').innerHTML =
+        `<option value="__shared" ${sel==='__shared'?'selected':''}>— Shared / global template —</option>` +
+        DB.clients.map(c=>`<option value="${c.id}" ${c.id===sel?'selected':''}>${c.name}</option>`).join('');
+    }
+    function fillProducts(sel){
+      const cid=document.getElementById('e-client').value;
+      const prods=DB.products.filter(p=>p.client===cid);
+      document.getElementById('e-product').innerHTML =
+        `<option value="__generic">— Generic for this client —</option>` +
+        prods.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${p.name} (${p.sku})</option>`).join('');
+    }
+    function fillBaseOptions(){
+      document.getElementById('e-base').innerHTML =
+        BASE_UNITS.map(([c,n])=>`<option value="${c}">${n} (${c})</option>`).join('');
+    }
+    function fillTemplates(){
+      document.getElementById('e-template').innerHTML =
+        `<option value="">— Blank (build from scratch) —</option>` +
+        DB.packagings.filter(isShared).map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+    }
+    function onClient(){
+      const v=document.getElementById('e-client').value;
+      const prodSel=document.getElementById('e-product');
+      const baseSel=document.getElementById('e-base');
+      const cloneRow=document.getElementById('clone-row');
+      if(v==='__shared'){
+        prodSel.innerHTML='<option>n/a — shared template</option>'; prodSel.disabled=true;
+        baseSel.disabled=false;
+        cloneRow.style.display='none';                  // a template isn't cloned from another
+        document.getElementById('base-note').textContent='Shared template — global, available to every client. Clone it onto a product to add that product’s barcodes.';
+      } else {
+        prodSel.disabled=false; fillProducts();
+        cloneRow.style.display='';
+        onProduct();
+      }
+    }
+    function onProduct(){
+      const pid=document.getElementById('e-product').value;
+      const baseSel=document.getElementById('e-base');
+      if(pid==='__generic'||!pid){
+        baseSel.disabled=false;
+        document.getElementById('base-note').textContent='Client-level generic — pick any base unit.';
+      } else {
+        const p=DB.products.find(x=>x.id===pid);
+        const code=prodBase[p.uom]||p.uom.toUpperCase();
+        baseSel.value=code; baseSel.disabled=true;
+        document.getElementById('base-note').innerHTML=`Base unit is locked to the product’s own UoM: <b>${p.uom}</b>. Add this product’s barcodes on each level.`;
+      }
+      syncBaseRow();
+    }
+    function syncBaseRow(){
+      const code=document.getElementById('e-base').value;
+      const name=(BASE_UNITS.find(b=>b[0]===code)||[code,code])[1];
+      if(!working.length || working[0].base){
+        working[0]={ level:name, uom:code, perParent:1, factor:1, barcode:'—', note:'base unit', base:true };
+      }
+      renderLevels();
+    }
+
+    // ---------- clone from template ----------
+    function cloneTemplate(){
+      const id=document.getElementById('e-template').value;
+      if(!id) return;
+      const t=DB.packagings.find(p=>p.id===id);
+      working=JSON.parse(JSON.stringify(t.levels));
+      working[0].base=true;
+      // barcodes are template-blank; keep them blank so the user adds product-specific ones
+      working.forEach((l,n)=>{ if(n>0) l.barcode='—'; });
+      // if a real product is selected, keep its base unit name on row 0
+      const pid=document.getElementById('e-product').value;
+      if(pid && pid!=='__generic'){ const p=DB.products.find(x=>x.id===pid); if(p){ const code=prodBase[p.uom]||p.uom.toUpperCase();
+        working[0].uom=code; working[0].level=(BASE_UNITS.find(b=>b[0]===code)||[code,code])[1]; } }
+      renderLevels();
+      document.getElementById('base-note').innerHTML=`Cloned from <b>${t.name}</b> — now add this product’s barcodes on each level.`;
+    }
+
+    // ---------- pack levels ----------
+    function renderLevels(){
+      document.getElementById('lvl-rows').innerHTML=working.map((l,n)=>{
+        let qtyCell;
+        if(n===0){ qtyCell='<span class="muted">— (base)</span>'; }
+        else {
+          const basis = l.basis==='base' ? 'Base unit' : (l.basis || (working[n-1]&&working[n-1].level));
+          qtyCell = `×${l.perParent} <span class="muted">of ${basis}</span>`;
+        }
+        return `<tr><td>${n+1}</td><td><b>${l.level}</b></td><td class="mono">${l.uom}</td>
+        <td>${qtyCell}</td>
+        <td class="mono">${l.factor}</td><td class="mono">${l.barcode||'—'}</td>
+        <td class="muted">${l.note||''}</td>
+        <td>${n===0?'':'<a href="#" onclick="removeLevel('+n+');return false">Remove</a>'}</td></tr>`;
+      }).join('');
+    }
+    function removeLevel(n){ working.splice(n,1); renderLevels(); }
+    function openLevelModal(){
+      document.getElementById('ml-uom').innerHTML =
+        units.filter(u=>u.cat==='Packaging'||u.cat==='Count').map(u=>`<option value="${u.code}">${u.code} — ${u.name}</option>`).join('');
+      // "Defined against": Base unit + any existing non-base level (for true nesting)
+      document.getElementById('ml-basis').innerHTML =
+        '<option value="base">Base unit</option>' +
+        working.slice(1).map(l=>`<option value="${l.level}">${l.level} (factor ${l.factor})</option>`).join('');
+      document.getElementById('ml-name').value=''; document.getElementById('ml-qty').value=6; document.getElementById('ml-barcode').value='';
+      levelHint(); openModal('m-level');
+    }
+    function levelHint(){
+      const b=document.getElementById('ml-basis').value;
+      const qty=parseInt(document.getElementById('ml-qty').value,10)||1;
+      const pf = b==='base' ? 1 : (working.find(l=>l.level===b)||{factor:1}).factor;
+      document.getElementById('ml-hint').textContent =
+        `Factor → base = ${pf} × ${qty} = ${pf*qty}  ·  ${b==='base'?'independent pack off the base unit':'nested on '+b}`;
+    }
+    function addLevelConfirm(){
+      const name=document.getElementById('ml-name').value.trim()||'New level';
+      const uom=document.getElementById('ml-uom').value;
+      const basis=document.getElementById('ml-basis').value;
+      const qty=parseInt(document.getElementById('ml-qty').value,10)||1;
+      const bc=document.getElementById('ml-barcode').value.trim()||'—';
+      const pf = basis==='base' ? 1 : (working.find(l=>l.level===basis)||{factor:1}).factor;
+      const factor = pf*qty;
+      working.push({ level:name, uom, basis, perParent:qty, factor, barcode:bc,
+        note:`${qty} × ${basis==='base'?'base':basis}` });
+      renderLevels(); closeModal('m-level');
+    }
+
+    // ---------- add unit ----------
+    function openUnitModal(){ document.getElementById('mu-code').value=''; document.getElementById('mu-name').value=''; document.getElementById('mu-base').checked=false; openModal('m-unit'); }
+    function addUnitConfirm(){
+      units.push({ code:(document.getElementById('mu-code').value.trim()||'NEW').toUpperCase(), name:document.getElementById('mu-name').value.trim()||'New unit',
+        cat:document.getElementById('mu-cat').value, dec:document.getElementById('mu-dec').value==='Allowed', base:document.getElementById('mu-base').checked });
+      renderUnits(); tab('units'); closeModal('m-unit');
+    }
+
+    // ---------- open / new / clone ----------
+    function openPkg(i){
+      const p=DB.packagings[i];
+      document.getElementById('edit-title').textContent=p.name;
+      document.getElementById('e-name').value=p.name;
+      fillBaseOptions(); fillTemplates();
+      fillClients(isShared(p)?'__shared':p.client);
+      onClient();
+      if(!isShared(p)){ fillProducts(p.product==='—'?'__generic':p.product); onProduct(); }
+      working=JSON.parse(JSON.stringify(p.levels)); if(working[0]) working[0].base=true;
+      document.getElementById('e-notes').innerHTML = noteField({ ref: p.id || 'UOM-DRAFT', level:'header', title:'Notes (optional)' });
+      renderLevels(); show('edit');
+    }
+    function newHierarchy(){
+      document.getElementById('edit-title').textContent='New packaging hierarchy';
+      document.getElementById('e-name').value='';
+      fillBaseOptions(); fillTemplates();
+      fillClients('__shared'); onClient();
+      document.getElementById('e-notes').innerHTML = noteField({ ref:'UOM-DRAFT', level:'header', title:'Notes (optional)' });
+      working=[]; syncBaseRow(); show('edit');
+    }
+    function startClone(i){
+      const t=DB.packagings[i];
+      document.getElementById('edit-title').textContent='New packaging (from template)';
+      document.getElementById('e-name').value='';
+      fillBaseOptions(); fillTemplates();
+      fillClients(DB.clients[0].id); onClient();         // defaults to first client, product enabled
+      document.getElementById('e-template').value=t.id; cloneTemplate();
+      document.getElementById('e-notes').innerHTML = noteField({ ref:'UOM-DRAFT', level:'header', title:'Notes (optional)' });
+      show('edit');
+    }
+
+    function openModal(id){ document.getElementById(id).style.display='flex'; }
+    function closeModal(id){ document.getElementById(id).style.display='none'; }
+    function show(v){document.getElementById('view-list').style.display=v==='list'?'':'none';
+      document.getElementById('view-edit').style.display=v==='edit'?'':'none';window.scrollTo(0,0);}
+  </script>
+</body></html>

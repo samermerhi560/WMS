@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outbound / Shipments — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-outbound" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Outbound / Shipments">
+  <div id="page-content">
+    <style>
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-warn  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-block { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .tag.tag-ok    { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .print-only.phead { margin-bottom:10px; }
+    </style>
+
+    <div class="print-only phead"><h1>Outbound / Shipments</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Outbound / Shipments</h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">Shipped vs ordered by client and period — fulfilment performance, short shipments and back-orders.
+      Reads outbound orders (<code>outTotals</code> / <code>lineShipped</code>) and dispatch transactions.</p>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Filters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>Created from</span><input type="date" id="f-since"></label>
+        <label class="field"><span>Created to</span><input type="date" id="f-until"></label>
+        <label class="field"><span>Client</span><select id="f-client"></select></label>
+        <label class="field"><span>Site</span><select id="f-site"></select></label>
+        <label class="field"><span>Status</span><select id="f-status">
+          <option value="all">All statuses</option>
+          <option value="open">Open</option>
+          <option value="allocated">Allocated</option>
+          <option value="picking">Picking</option>
+          <option value="picked">Picked</option>
+          <option value="partial">Partial (back-ordered)</option>
+          <option value="dispatched">Dispatched</option>
+        </select></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="table-toolbar no-print">
+      <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+      <button class="btn btn-sm btn-outline" onclick="window.print()">Print</button>
+      <span class="chip">↑ Client <span class="x">✕</span></span>
+      <span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th><span class="funnel">▾</span>Order</th>
+        <th><span class="funnel">▾</span>Client ref</th>
+        <th><span class="funnel">▾</span>Created</th>
+        <th><span class="funnel">▾</span>Status</th>
+        <th class="num">Ordered</th>
+        <th class="num">Allocated</th>
+        <th class="num">Shipped</th>
+        <th class="num">Remaining</th>
+        <th>Fulfilment</th>
+        <th>Notes</th>
+      </tr></thead><tbody id="rows"></tbody></table>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const since0 = '2026-05-18';
+    const state = { since:since0, until:'', client:'all', site:'all', status:'all' };
+
+    function rowsData(){
+      return (DB.outbound||[]).filter(o=>{
+        const d = o.created||'';
+        if (state.since && d && d < state.since) return false;
+        if (state.until && d && d > state.until) return false;
+        if (state.client!=='all' && o.client!==state.client) return false;
+        if (state.site!=='all'   && o.site!==state.site)     return false;
+        if (state.status!=='all' && o.status!==state.status) return false;
+        return true;
+      });
+    }
+
+    function fulfilCell(o, t){
+      if (o.status==='dispatched'){
+        if (o.lines.some(l=>l.shortClosed) || (t.ship < t.req)) return `<span class="tag tag-warn">short-closed</span>`;
+        return `<span class="tag tag-ok">complete</span>`;
+      }
+      if (o.status==='partial') return `<span class="tag tag-block">back-ordered ${t.remaining}</span>`;
+      if (t.short) return `<span class="tag tag-warn">short stock</span>`;
+      return `<span class="muted">—</span>`;
+    }
+
+    function render(){
+      const list = rowsData();
+      // group by client
+      const byClient = {};
+      list.forEach(o => { (byClient[o.client] = byClient[o.client] || []).push(o); });
+
+      let html = '';
+      let tReq=0, tShip=0, tAlloc=0, openN=0, partN=0, dispN=0;
+      Object.keys(byClient).sort((a,b)=>dbName('clients',a).localeCompare(dbName('clients',b))).forEach(cid=>{
+        const orders = byClient[cid];
+        const bo = clientAllowsBackorder(cid) ? 'back-order' : 'short-close';
+        const cReq = orders.reduce((s,o)=>s+outTotals(o).req,0);
+        const cShip = orders.reduce((s,o)=>s+outTotals(o).ship,0);
+        html += `<tr class="group"><td colspan="10">▦ ${esc(dbName('clients',cid))}
+          <span class="gsum">${orders.length} order(s) · ${cShip}/${cReq} units shipped · remainder policy: ${bo}</span></td></tr>`;
+        orders.sort((a,b)=>String(b.created).localeCompare(String(a.created))).forEach(o=>{
+          const t = outTotals(o);
+          tReq+=t.req; tShip+=t.ship; tAlloc+=t.allc;
+          if (['open','allocated','picking','picked'].includes(o.status)) openN++;
+          if (o.status==='partial') partN++;
+          if (o.status==='dispatched') dispN++;
+          html += `<tr>
+            <td class="mono"><a href="erp-so-orders.html?out=${o.id}">${o.id}</a></td>
+            <td>${esc(o.ref||'—')}</td>
+            <td class="mono">${esc(o.created||'—')}</td>
+            <td>${statusBadge(o.status)}</td>
+            <td class="num">${t.req}</td>
+            <td class="num">${t.allc}</td>
+            <td class="num">${t.ship}</td>
+            <td class="num">${t.remaining||'<span class="muted">0</span>'}</td>
+            <td>${fulfilCell(o,t)}</td>
+            <td>${noteFor(o.id) || '<span class="muted">—</span>'}</td>
+          </tr>`;
+        });
+      });
+      $('rows').innerHTML = html || `<tr><td colspan="10" class="muted" style="padding:18px">No orders match the filters.</td></tr>`;
+
+      $('kpis').innerHTML = `
+        <div class="kpi"><span class="k-label">Orders</span><span class="k-val">${list.length}</span></div>
+        <div class="kpi"><span class="k-label">Units ordered</span><span class="k-val">${tReq}</span></div>
+        <div class="kpi k-good"><span class="k-label">Units shipped</span><span class="k-val">${tShip}</span><span class="k-sub">${tReq?Math.round(tShip/tReq*100):0}% of ordered</span></div>
+        <div class="kpi"><span class="k-label">Open / in-progress</span><span class="k-val">${openN}</span></div>
+        <div class="kpi k-warn"><span class="k-label">Back-ordered</span><span class="k-val">${partN}</span></div>
+        <div class="kpi"><span class="k-label">Dispatched</span><span class="k-val">${dispN}</span></div>`;
+      $('summary').textContent = `${list.length} order(s) · ${tShip}/${tReq} units shipped`;
+      $('p-filters').textContent = `${state.since||'—'} → ${state.until||WMS_TODAY}  ·  Client: ${state.client==='all'?'All':dbName('clients',state.client)}  ·  Site: ${state.site==='all'?'All':dbName('sites',state.site)}  ·  Status: ${state.status}`;
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-since').value = state.since;
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-site').innerHTML   = `<option value="all">All sites</option>` + DB.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    $('f-since').addEventListener('change',  e=>{ state.since=e.target.value; render(); });
+    $('f-until').addEventListener('change',  e=>{ state.until=e.target.value; render(); });
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; render(); });
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; render(); });
+    $('f-status').addEventListener('change', e=>{ state.status=e.target.value; render(); });
+    render();
+  </script>
+</body></html>

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell",
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "mcp__Claude_Preview__preview_start",
+      "PowerShell(node \"C:/Users/samer/Downloads/wms/_pa_reject_test.js\")",
+      "mcp__visualize__read_me"
+    ]
+  }
+}

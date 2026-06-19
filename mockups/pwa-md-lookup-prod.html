@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Product lookup — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Product lookup" data-pwa-back="pwa-home.html">
+  <div id="page-content"><div id="lk"></div></div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const root = document.getElementById('lk');
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+    // candidate list = the current client's products (value = a real barcode so resolveScan resolves it)
+    const prodList = () => DB.products.filter(p => p.client===PWA.ctx.clientId)
+      .map(p => ({ value:p.barcode||p.sku, label:p.name, sub:p.sku }));
+
+    function prodPanel(p, level){
+      const flags    = Object.keys(p.track||{}).filter(k => p.track[k]);
+      const tracking = flags.length ? flags.join(' · ') : 'none';
+      const levels   = packagingFor(p.id);
+      const lvlRows  = levels.length ? levels.map(L => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:2px 0">
+          <span>${esc(L.level)} <span class="muted">(${esc(L.uom)})</span></span>
+          <span class="mono">×${L.factor}${(L.barcode&&L.barcode!=='—')?' · '+esc(L.barcode):''}</span></div>`).join('') : '<div class="muted">—</div>';
+      const scanned  = level ? `<div class="muted">Scanned unit: <b>${esc(level.level)}</b> (×${level.factor} base)</div>` : '';
+      const lps      = lpnsOfProductAtSite(p.id, PWA.ctx.siteId);
+      const total    = lps.reduce((s,l)=>s+l.qty,0);
+      const rows = lps.length
+        ? lps.map(l => `<div class="task">
+            <span class="meta"><b>${esc(locName(l.loc))}</b><small>${esc(l.id)}${l.lot?' · lot '+esc(l.lot):''}${l.expiry?' · exp '+esc(l.expiry):''}</small></span>
+            ${statusBadge(l.status)} <span class="badge">${l.qty} ${esc(p.uom)}</span></div>`).join('')
+        : `<p class="scan-hint" style="text-align:left">No stock at ${esc(PWA.siteName())}.</p>`;
+      return `<div class="panel" style="margin-bottom:10px">
+          <b>${esc(p.name)}</b><br><span class="muted mono">${esc(p.sku)} · ${esc(dbName('clients',p.client))}</span>
+          <div class="spacer"></div>
+          <div class="muted">Tracking: ${esc(tracking)}</div>
+          <div class="muted">Base unit: ${esc(p.uom)} · ${esc(catName(p.category))} / ${esc(subCatName(p.subCategory))}</div>
+          ${scanned}
+          <div class="spacer"></div>
+          <div class="muted" style="text-transform:uppercase;font-size:11px;letter-spacing:.04em;margin-bottom:2px">Packaging</div>
+          ${lvlRows}
+        </div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Stored at ${esc(PWA.siteName())} (${lps.length})</p>
+        ${rows}
+        <div class="panel" style="margin-top:8px;text-align:center"><b>${total}</b> <span class="muted">${esc(p.uom)} on hand</span></div>`;
+    }
+
+    function errPanel(t){ return `<div class="panel" style="border-color:#e6bcbc;background:#fbeaea">${t}</div>`; }
+
+    function render(code, resolved){
+      let html = PWAScan.field({ id:'sf-prod', prompt:'Scan a product', autofocus:true,
+        placeholder:'5012345000019  ·  OLIVE-500', kinds:['product'],
+        hint:'Read-only — shows tracking, packaging and where it is stored.', list:prodList(), onScan:onScan });
+      if (code!==undefined){
+        if (resolved && resolved.type==='product') html += prodPanel(resolved.entity, resolved.extra && resolved.extra.level);
+        else if (resolved) html += errPanel(`<b>That's a ${esc(resolved.type)}, not a product.</b><div class="muted mono">${esc(code)} → ${esc(resolved.label)}</div>`);
+        else html += errPanel(`<b>Not found</b><div class="muted mono">${esc(code)}</div><div class="spacer"></div><div>No product matches that barcode or SKU.</div>`);
+      }
+      html += `<div class="spacer"></div><a class="btn btn-outline" href="pwa-home.html" style="display:block;text-align:center">Done</a>`;
+      root.innerHTML = html;
+      const inp = root.querySelector('.sb-input'); if (inp) inp.focus();
+    }
+    function onScan(code, resolved){ render(code, resolved); }
+    render();
+  })();
+  </script>
+</body>
+</html>

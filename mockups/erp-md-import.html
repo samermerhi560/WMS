@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSV Import — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-import" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › CSV Import">
+  <div id="page-content">
+    <div class="page-head"><h1>CSV Import</h1>
+      <div class="acts"><button class="btn btn-outline">Download template</button></div></div>
+    <p class="sub">Bulk-load Products or Locations when onboarding a client. Upload → map columns → review → import.</p>
+
+    <div class="panel">
+      <fieldset><legend>1 · What to import</legend>
+        <div class="field-row">
+          <label class="field"><span>Entity <span class="req">*</span></span>
+            <select><option>Products</option><option>Locations</option></select></label>
+          <label class="field"><span>Client (for products)</span>
+            <select><option>ACME Foods Ltd</option><option>Globex Pharma</option></select></label>
+          <label class="field"><span>Site (for locations)</span>
+            <select><option>Lyon DC</option><option>Paris Hub</option></select></label>
+        </div>
+      </fieldset>
+
+      <fieldset><legend>2 · File</legend>
+        <div class="placeholder" style="height:90px">＋ Drop CSV here or click to choose · <span class="mono">products_acme.csv</span></div>
+        <p class="wf-note muted">First row treated as headers. UTF-8, comma-separated.</p>
+      </fieldset>
+
+      <fieldset><legend>3 · Column mapping</legend>
+        <table class="wf"><thead><tr><th>CSV column</th><th>→ Maps to field</th><th>Sample value</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">sku</td><td><select><option>SKU *</option></select></td><td class="muted">OLIVE-750</td></tr>
+            <tr><td class="mono">name</td><td><select><option>Product name *</option></select></td><td class="muted">Olive Oil 750ml</td></tr>
+            <tr><td class="mono">uom</td><td><select><option>Base UoM</option></select></td><td class="muted">EA</td></tr>
+            <tr><td class="mono">barcode</td><td><select><option>Barcode (EAN)</option></select></td><td class="muted">5012345000033</td></tr>
+            <tr><td class="mono">temp</td><td><select><option>Storage condition</option></select></td><td class="muted">Ambient</td></tr>
+            <tr><td class="mono">notes</td><td><select><option>— ignore —</option></select></td><td class="muted">promo line</td></tr>
+          </tbody></table>
+      </fieldset>
+
+      <fieldset><legend>4 · Validation preview</legend>
+        <div class="btn-row" style="margin-bottom:10px">
+          <span class="badge b-available">42 ready</span>
+          <span class="badge b-toputaway">3 warnings</span>
+          <span class="badge b-quarantine">1 error</span>
+        </div>
+        <table class="wf"><thead><tr><th>Row</th><th>SKU</th><th>Name</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td class="mono">OLIVE-750</td><td>Olive Oil 750ml</td><td><span class="badge b-available">ready</span></td></tr>
+            <tr><td>2</td><td class="mono">PASTA-500</td><td>Pasta Penne 500g</td><td><span class="badge b-available">ready</span></td></tr>
+            <tr><td>3</td><td class="mono">OLIVE-500</td><td>Olive Oil 500ml</td><td><span class="badge b-toputaway">warning — SKU already exists, will update</span></td></tr>
+            <tr><td>4</td><td class="mono"></td><td>Missing SKU</td><td><span class="badge b-quarantine">error — SKU required</span></td></tr>
+          </tbody></table>
+      </fieldset>
+
+      <div id="e-notes" style="margin:10px 0"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary">Import 42 rows</button>
+        <button class="btn btn-outline">Download error report</button>
+        <a class="btn btn-outline" href="erp-md-products.html">Cancel</a>
+      </div>
+    </div>
+  </div>
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    document.getElementById('e-notes').innerHTML = noteField({ ref:'IMPORT', level:'header', title:'Notes (optional)' });
+  </script>
+</body></html>

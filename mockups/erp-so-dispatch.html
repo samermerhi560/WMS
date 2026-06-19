@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pick / Dispatch — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="so-dispatch" data-erp-title="Stock-Out"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Stock-Out › Pick / Dispatch">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-ok   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-warn { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+
+      .line-box { border:1px solid var(--line-soft); border-radius:var(--radius); padding:14px 16px; margin-bottom:14px; background:var(--white); }
+      .line-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:8px; }
+      .line-head .ttl { font-weight:700; font-size:15px; }
+      .line-head .right { margin-left:auto; }
+
+      table.pick { width:100%; border-collapse:collapse; margin-bottom:10px; }
+      table.pick th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em;
+        color:var(--ink-soft); border-bottom:1.5px solid var(--line); padding:6px 8px; white-space:nowrap; }
+      table.pick td { padding:7px 8px; border-bottom:1px solid var(--line-soft); vertical-align:top; font-size:13px; }
+      table.pick .num { text-align:right; white-space:nowrap; }
+      table.pick input[type=number] { max-width:90px; }
+      table.pick input[type=text] { width:100%; min-width:130px; }
+      .ser-note { font-size:11px; color:var(--ink-faint); margin-top:3px; }
+
+      .chosen { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:11px 14px;
+        border:1px solid var(--line); border-radius:var(--radius); background:var(--fill); }
+      .chosen.ok   { border-color:#6fae72; background:#eef7ef; }
+      .chosen.warn { border-color:#caa24a; background:#fbf6e9; }
+      .chosen .mark { font-size:20px; line-height:1; } .chosen.ok .mark { color:var(--ok); } .chosen.warn .mark { color:#8a6d00; }
+      .chosen .txt { flex:1; min-width:200px; } .chosen .txt b { display:block; } .chosen .txt small { color:var(--ink-soft); }
+
+      .confirm-bar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+      .confirm-bar .sum { font-size:13px; color:var(--ink-soft); } .confirm-bar .right { margin-left:auto; display:flex; gap:8px; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="dp-banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Pick / Dispatch</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn" disabled>Export</button></div>
+      </div>
+      <p class="sub">Pick the allocated stock and confirm dispatch. On the floor this runs on the PWA (scan location → product → qty → serials); here is the full ERP manual fallback. Record picked quantities (and serials for serial-tracked products), then <b>confirm dispatch</b> — the stock is <b>issued</b> (removed from inventory) and a delivery note is produced. Short picks are captured as discrepancies. <span class="muted">(Allocation + pick + dispatch can also be done in one pass on <a href="erp-so-fulfil.html">Express Fulfil</a>.)</span></p>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Order reference</span><input id="f-ref"></label>
+          <label class="field"><span>Client</span><select id="f-client"></select></label>
+          <label class="field"><span>Site (operator)</span><select id="f-site"></select></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Client <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>Order</th><th><span class="funnel">▾</span>Client</th>
+          <th><span class="funnel">▾</span>Ref</th><th><span class="funnel">▾</span>Lines</th>
+          <th><span class="funnel">▾</span>Picked / Allocated</th><th><span class="funnel">▾</span>Status</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== DETAIL ===================== -->
+    <div id="view-detail" style="display:none">
+      <div class="page-head"><h1 id="d-title">Pick / dispatch order</h1>
+        <div class="acts">
+          <button class="btn btn-outline" onclick="releaseOrder()">Release allocation</button>
+          <button class="btn btn-outline" style="color:var(--bad)" onclick="cancelOrder()">Cancel order</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+        </div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to pick list</a></div>
+
+      <div class="panel">
+        <fieldset><legend>Outbound order</legend>
+          <div class="sum-grid" id="d-summary"></div>
+        </fieldset>
+      </div>
+
+      <div class="panel" id="d-photos-panel" style="background:var(--brand-tint);border-color:var(--brand)">
+        <fieldset><legend>Proof of load</legend>
+          <p class="sub" style="margin:0 0 10px">Capture dispatch evidence — loaded pallets, sealed cartons, truck / seal numbers. Photos are optional but recommended; they appear on the delivery note.</p>
+          <div id="d-photos"></div>
+          <div id="d-notes" style="margin-top:12px"></div>
+        </fieldset>
+      </div>
+
+      <div id="lines-wrap"></div>
+
+      <div class="panel">
+        <div class="confirm-bar">
+          <label class="field" style="margin:0;min-width:210px"><span>Carrier (delivery)</span><select id="d-carrier"></select></label>
+          <div class="sum" id="confirm-sum"></div>
+          <div class="right">
+            <button class="btn btn-outline" id="save-btn" onclick="savePicks()">Save picks</button>
+            <button class="btn btn-primary" id="dispatch-btn" onclick="confirmDispatch()">Confirm dispatch</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-15';
+    const loc = id => DB.locations.find(x=>x.id===id) || {};
+
+    /* ---- session state ---- */
+    const state = { site:'S-LYON', client:'all', ref:'' };
+    let cur = null;
+    let work = [];   // [{ product, uom, serial, picks:[{lpn,lot,expiry,from,allocated,picked,scan,serials}] }]
+
+    /* ============================================================ LIST */
+    function pickList(){
+      return DB.outbound.filter(o => {
+        if (!['allocated','picking','picked'].includes(o.status)) return false;
+        if (o.site !== state.site) return false;
+        if (state.client !== 'all' && o.client !== state.client) return false;
+        if (state.ref){ const hay=(o.id+' '+(o.ref||'')).toLowerCase(); if(!hay.includes(state.ref)) return false; }
+        return true;
+      });
+    }
+    function renderList(){
+      const list = pickList();
+      $('rows').innerHTML = list.length ? list.map(o => {
+        const t = outTotals(o);
+        return `<tr>
+          <td><input type="checkbox" style="width:auto"></td><td class="dots">⋮</td>
+          <td class="mono"><a href="#" onclick="openDispatch('${o.id}');return false">${o.id}</a></td>
+          <td>${dbName('clients', o.client)}</td>
+          <td class="mono">${esc(o.ref||'—')}</td>
+          <td>${o.lines.length}</td>
+          <td>${t.pick} / ${t.allc}</td>
+          <td>${statusBadge(o.status)}</td>
+          <td><a href="#" onclick="openDispatch('${o.id}');return false">${o.status==='picked'?'Dispatch ›':'Pick / dispatch ›'}</a></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="9" class="muted" style="padding:18px">No allocated orders awaiting pick/dispatch at ${dbName('sites',state.site)}.</td></tr>`;
+      const total = DB.outbound.filter(o=>['allocated','picking','picked'].includes(o.status) && o.site===state.site).length;
+      $('list-summary').textContent = `${list.length} order(s) shown · ${total} to pick/dispatch at ${dbName('sites',state.site)}`;
+    }
+
+    /* ============================================================ DETAIL */
+    function renderDetail(order){
+      cur = order;
+      $('d-title').textContent = `Pick / dispatch ${order.id}`;
+      $('d-summary').innerHTML = [
+        ['Order', order.id], ['Client', dbName('clients', order.client)], ['Site', dbName('sites', order.site)],
+        ['Client ref', order.ref || '—'], ['Type', order.fullStockOut?'Full stock-out':'Partial (by line)'], ['Status', order.status],
+      ].map(([k,v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+      // prominent proof-of-load gallery (header ref = order id)
+      $('d-photos').innerHTML = photoField({ ref:order.id, level:'header', title:'Dispatch photos' });
+      $('d-notes').innerHTML = noteField({ ref:order.id, level:'header', title:'Dispatch notes (optional)' });
+      // carrier picker (recorded on the shipment / delivery note)
+      $('d-carrier').innerHTML = `<option value="">— select carrier —</option>`+DB.carriers.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+      if (order.carrier){ $('d-carrier').value = order.carrier; if($('d-carrier')._ssSync)$('d-carrier')._ssSync(); }
+
+      work = order.lines.map(line => {
+        const p = DB.products.find(x=>x.id===line.product) || {};
+        const serial = !!(p.track && p.track.serial);
+        const picks = (line.alloc||[]).map(a => ({
+          lpn:a.lpn, lot:a.lot, expiry:a.expiry, from:a.from, allocated:a.qty,
+          picked: (a.picked!=null && (order.status==='picking'||order.status==='picked')) ? a.picked : a.qty,   // default = allocated
+          scan: (loc(a.from).structured || a.from),
+          serials: a.serials || serialRange(a.lpn, (a.picked!=null?a.picked:a.qty))
+        }));
+        return { product:line.product, uom:p.uom||'', serial, picks, cancelled:!!line.cancelled };
+      });
+      $('lines-wrap').innerHTML = work.map((w,i)=>lineHtml(w,i)).join('');
+      work.forEach((w,i)=>renderLineSummary(i));
+      renderConfirm();
+    }
+
+    // mock serial helper: surface the LPN's seeded serial range for the picked count
+    function serialRange(lpnId, n){
+      const l = DB.lpns.find(x=>x.id===lpnId) || {};
+      return (l.serials && l.serials.length) ? l.serials.join(', ') : '';
+    }
+
+    function lineHtml(w, idx){
+      if (w.cancelled) return `<div class="line-box" id="line-${idx}" style="opacity:.6"><div class="line-head"><span class="ttl">Line ${idx+1} — ${esc(prodName(w.product))}</span> <span class="tag tag-warn">line cancelled</span></div></div>`;
+      if (!w.picks.length){
+        return `<div class="line-box"><div class="line-head"><span class="ttl">Line ${idx+1} — ${esc(prodName(w.product))}</span></div>
+          <p class="muted" style="margin:0">No allocation on this line — go back to <a href="erp-so-alloc.html?out=${esc(cur.id)}">Allocation</a> first.</p></div>`;
+      }
+      const serHead = w.serial ? '<th>Serials picked</th>' : '';
+      const rows = w.picks.map((pk,pi)=>{
+        const serCell = w.serial
+          ? `<td><input type="text" value="${esc(pk.serials)}" onchange="setSerials(${idx},${pi},this.value)"><div class="ser-note">Record ${pk.picked} serial(s); count must match picked qty.</div></td>`
+          : '';
+        const flagNote = pk.flag
+          ? `<div class="ser-note" style="color:#7a2c2c">${pk.flag==='damaged'?`⚠ ${pk.flagQty} damaged → quarantine${pk.flagReason?' · '+esc(pk.flagReason):''}`:`⚠ ${pk.flagQty} not found → count raised`} (short ${pk.flagQty})</div>`
+          : '';
+        return `<tr>
+          <td><input type="text" value="${esc(pk.scan)}" onchange="setScan(${idx},${pi},this.value)" placeholder="scan location"></td>
+          <td class="mono">${pk.lpn}${pk.lot?`<br><span class="muted" style="font-size:11px">lot ${esc(pk.lot)}</span>`:''}</td>
+          <td class="num">${pk.allocated} ${esc(w.uom)}</td>
+          <td class="num"><input type="number" min="0" max="${pk.allocated}" value="${pk.picked}" onchange="setPicked(${idx},${pi},this.value)"></td>
+          ${serCell}
+          <td><a href="#" onclick="reportDamage(${idx},${pi});return false" style="font-size:12px">Report damage</a><br><a href="#" onclick="stockNotFound(${idx},${pi});return false" style="font-size:12px;color:var(--bad)">Stock not found</a>${flagNote}</td>
+        </tr>`;
+      }).join('');
+      return `<div class="line-box" id="line-${idx}">
+        <div class="line-head"><span class="ttl">Line ${idx+1} — ${esc(prodName(w.product))}</span>
+          <span class="right" style="display:inline-flex;align-items:center;gap:8px">
+            <span class="muted" style="font-size:12px">Pick from the allocated location(s)${w.serial?' · serial-tracked':''}</span>
+            ${photoField({ ref:`${cur.id}:L${idx}`, level:'line' })}
+            ${noteField({ ref:`${cur.id}:L${idx}`, level:'line', title:'Line note' })}
+          </span></div>
+        <table class="pick"><thead><tr><th>Location (scan)</th><th>LPN</th><th class="num">Allocated</th><th class="num">Picked</th>${serHead}<th>Issue</th></tr></thead>
+          <tbody>${rows}</tbody></table>
+        <div id="psum-${idx}"></div>
+      </div>`;
+    }
+
+    function setScan(i,pi,v){ work[i].picks[pi].scan = v; }
+    function setSerials(i,pi,v){ work[i].picks[pi].serials = v; }
+    function setPicked(i,pi,v){
+      const pk = work[i].picks[pi];
+      pk.picked = Math.max(0, Math.min(+v||0, pk.allocated));
+      renderLineSummary(i); renderConfirm();
+    }
+
+    // F8 — damage found at pick: peel the damaged qty off the plate to a blocked disposition (pickReject),
+    // and shrink this row's allocated/pickable so the line shorts → existing back-order / short-close logic runs.
+    function reportDamage(i,pi){
+      const w = work[i], pk = w.picks[pi];
+      const max = pk.allocated;
+      const raw = prompt(`Report damage on ${pk.lpn} — quantity damaged (max ${max}):`, String(Math.min(max,1)));
+      if (raw===null) return;
+      const qty = Math.max(0, Math.min(Math.floor(+raw||0), max));
+      if (!(qty>0)) { alert('Enter a quantity greater than 0.'); return; }
+      const reasons = reasonsFor('status','damaged');
+      const reason = prompt(`Reason for damage:\n- ${reasons.join('\n- ')}`, reasons[0]||'Damage found');
+      if (reason===null) return;
+      const res = pickReject(pk.lpn, qty, { disposition:'damaged', reason, user:currentUser(), ref:cur.id });
+      if (!res){ alert('Could not record the damage (nothing peeled).'); return; }
+      pk.allocated = Math.max(0, pk.allocated - qty);                 // line now shorts by the damaged qty
+      pk.picked = Math.min(pk.picked, pk.allocated);
+      pk.flag = 'damaged'; pk.flagQty = (pk.flagQty||0) + qty; pk.flagReason = reason;
+      $('lines-wrap').innerHTML = work.map((w2,k)=>lineHtml(w2,k)).join('');
+      work.forEach((w2,k)=>renderLineSummary(k)); renderConfirm();
+    }
+    // F8 — stock reported not found at the bin: mint a pending-approval count sheet (flagCountForMissing) and
+    // shrink this row's allocated/pickable so the not-found qty becomes a short (back-order / short-close).
+    function stockNotFound(i,pi){
+      const w = work[i], pk = w.picks[pi];
+      const max = pk.allocated;
+      const raw = prompt(`Stock NOT FOUND for ${pk.lpn} at ${esc(loc(pk.from).structured||pk.from)} — quantity missing (max ${max}):`, String(max));
+      if (raw===null) return;
+      const qty = Math.max(0, Math.min(Math.floor(+raw||0), max));
+      if (!(qty>0)) { alert('Enter a quantity greater than 0.'); return; }
+      flagCountForMissing({ lpn:pk.lpn, loc:pk.from, product:w.product, qty, site:cur.site, by:currentUser() });
+      pk.allocated = Math.max(0, pk.allocated - qty);                 // not-found qty shorts the line
+      pk.picked = Math.min(pk.picked, pk.allocated);
+      pk.flag = 'notfound'; pk.flagQty = (pk.flagQty||0) + qty;
+      $('lines-wrap').innerHTML = work.map((w2,k)=>lineHtml(w2,k)).join('');
+      work.forEach((w2,k)=>renderLineSummary(k)); renderConfirm();
+    }
+
+    // F18 — release / cancel mid-flight (mirrors erp-so-orders.releaseOrder / cancelOrder), then back to the list.
+    function releaseOrder(){
+      if (!cur) return;
+      if (!['allocated','picking','picked'].includes(cur.status)){ alert('Only an allocated / picking / picked order can be released.'); return; }
+      if (!confirm(`Release allocation for ${cur.id}? The reserved stock is freed and the order returns to OPEN for re-allocation.`)) return;
+      cur.lines.forEach(l=>{ l.alloc=[]; });
+      cur.status='open';
+      $('dp-banner').innerHTML = `<b>${esc(cur.id)}</b> — allocation released; reserved stock freed. Order is back to <b>open</b>.`;
+      $('dp-banner').style.display='block';
+      cur=null; renderList(); show('list');
+      location.href='erp-so-orders.html';
+    }
+    function cancelOrder(){
+      if (!cur) return;
+      if (cur.status==='dispatched'){ alert('A fully dispatched order cannot be cancelled — the stock has already shipped.'); return; }
+      if (cur.status==='cancelled') return;
+      const shipped = (cur.shipments||[]).length>0;
+      const msg = shipped
+        ? `Cancel the remaining balance of ${cur.id}? Already-shipped deliveries are kept; the un-shipped remainder is cancelled and reserved stock freed.`
+        : `Cancel order ${cur.id}? Any reserved stock is freed.`;
+      if (!confirm(msg)) return;
+      cur.lines.forEach(l=>{ l.alloc=[]; });
+      cur.status='cancelled';
+      cur=null; renderList(); show('list');
+      location.href='erp-so-orders.html';
+    }
+
+    function linePicked(w){ return w.picks.reduce((s,p)=>s+(+p.picked||0),0); }
+    function lineAlloc(w){ return w.picks.reduce((s,p)=>s+(+p.allocated||0),0); }
+    // Serial-completeness guard (mirrors erp-so-fulfil): a serial-tracked line being shipped MUST carry
+    // serial(s). Spec: "serials must be recorded on issue." Blocks dispatch (not the picks-save) until filled.
+    function serialGap(){
+      return work.some(w => w.serial && w.picks.some(p => (+p.picked||0) > 0 && !String(p.serials||'').trim()));
+    }
+
+    function renderLineSummary(idx){
+      const w = work[idx]; if (!w.picks.length){ return; }
+      const got = linePicked(w), all = lineAlloc(w);
+      const el = $('psum-'+idx);
+      if (got >= all){
+        el.innerHTML = `<div class="chosen ok"><span class="mark">✓</span><div class="txt"><b>Picked ${got} / ${all} ${esc(w.uom)}</b><small>Allocation fully picked.</small></div></div>`;
+      } else {
+        el.innerHTML = `<div class="chosen warn"><span class="mark">⚠</span><div class="txt"><b>Short pick — ${got} / ${all} ${esc(w.uom)} (short ${all-got})</b><small>The difference is recorded as a discrepancy; only the picked quantity ships.</small></div></div>`;
+      }
+    }
+
+    function renderConfirm(){
+      let all=0, got=0; work.forEach(w=>{ all+=lineAlloc(w); got+=linePicked(w); });
+      const sGap = serialGap();
+      $('dispatch-btn').disabled = !(got>0 && !sGap);   // dispatch needs picks AND serials on serial-tracked lines
+      $('save-btn').disabled = !(got>0);                // saving picks is allowed with serials still pending
+      const short = got<all;
+      $('confirm-sum').innerHTML = `Picking <b>${got}</b> of <b>${all}</b> allocated unit(s)${short?` · <span style="color:#8a6d00">short ${all-got} (discrepancy recorded)</span>`:''}.`
+        + (sGap ? ` <span style="color:#7a2c2c">· Serials required on serial-tracked line(s) before dispatch.</span>` : ` Dispatch issues the stock and removes it from inventory.`);
+    }
+
+    function writePicks(){
+      cur.lines.forEach((line,i)=>{
+        const w = work[i];
+        (line.alloc||[]).forEach((a,ai)=>{ const pk=w.picks[ai]; if(pk){ a.picked = +pk.picked||0; if (w.serial) a.serials = pk.serials; } });
+      });
+    }
+    function savePicks(){
+      if (!cur) return;
+      writePicks();
+      let all=0,got=0; work.forEach(w=>{ all+=lineAlloc(w); got+=linePicked(w); });
+      cur.status = got>=all ? 'picked' : 'picking';
+      $('dp-banner').innerHTML = `Picks saved for <b>${esc(cur.id)}</b> (status <b>${cur.status}</b>). Confirm dispatch when ready to issue the stock.`;
+      $('dp-banner').style.display='block';
+      cur=null; renderList(); show('list');
+    }
+    function confirmDispatch(){
+      if (!cur) return;
+      const carrier = $('d-carrier').value || '';
+      // F21 — re-assert consignee + carrier before issuing (parity with the PWA, which already enforces carrier).
+      if (!cur.shipTo){ alert('No ship-to consignee on this order — set the delivery point before dispatch.'); return; }
+      if (!carrier){ alert('Select a carrier (delivery) before confirming dispatch.'); return; }
+      // F15 — serial validation on issue: non-empty, count === picked qty, no duplicates (replaces presence-only check).
+      for (const w of work){
+        if (!w.serial) continue;
+        for (const pk of w.picks){
+          if ((+pk.picked||0) <= 0) continue;
+          const vs = validateSerials(pk.serials, pk.picked);
+          if (!vs.ok){ alert(`Serials invalid on ${esc(prodName(w.product))} — ${pk.lpn}: ${vs.error}.`); return; }
+        }
+      }
+      writePicks();
+      // C1 — re-validate every plate being issued is still issuable (present, not blocked/terminal/expired/frozen).
+      const guardLines = [];
+      cur.lines.forEach(line => (line.alloc||[]).forEach(a => { if ((+a.picked||0)>0) guardLines.push(a); }));
+      const guard = dispatchGuard(guardLines);
+      if (!guard.ok){ alert('Cannot dispatch — some allocated stock is no longer issuable:\n\n'+guard.fails.map(f=>`• ${f.lpn}: ${f.why}`).join('\n')); return; }
+      // F20 — cold-chain / carrier mismatch (confirm-gated): warn if a cold product ships on a non-cold carrier.
+      const coldIssued = guardLines.some(a => coldChainProduct((lpnById(a.lpn)||{}).product));
+      if (coldIssued && !carrierIsCold(carrier)){
+        if (!confirm('⚠ Cold-chain warning — this shipment contains a cold-chain product but the selected carrier is not cold-chain rated. Proceed anyway?')) return;
+      }
+      // F17b — match scanned location to the allocated `from`; note a manual override on the dispatch txn if mismatched.
+      const scanOf = {};
+      work.forEach(w => w.picks.forEach(pk => { scanOf[pk.lpn] = pk.scan; }));
+      const mis = [];
+      cur.lines.forEach(line => (line.alloc||[]).filter(a=>(+a.picked||0)>0).forEach(a => {
+        const typed = String(scanOf[a.lpn]||'').trim();
+        if (typed && typed!==a.from && typed!==(loc(a.from).structured||a.from) && typed!==locName(a.from)) mis.push({lpn:a.lpn, typed, exp:(loc(a.from).structured||a.from)});
+      }));
+      if (mis.length){
+        if (!confirm('⚠ Location mismatch — picked from a different bin than allocated:\n\n'+mis.map(m=>`• ${m.lpn}: scanned "${m.typed}" ≠ allocated "${m.exp}"`).join('\n')+'\n\nProceed? A manual override will be stamped on the dispatch record.')) return;
+      }
+      // build this shipment (one delivery note) from the picked allocation, and issue the stock
+      const shipId = `${cur.id.replace('OUT-','DN-')}-${(cur.shipments||[]).length+1}`;
+      const shipLines = []; let issued = 0;
+      cur.lines.forEach(line => {
+        const picks = (line.alloc||[]).filter(a => (+a.picked||0) > 0);
+        if (!picks.length) return;
+        let linePicked = 0;
+        const allocCopy = picks.map(a => {
+          const q = +a.picked||0; issued += q; linePicked += q;
+          const l = DB.lpns.find(x=>x.id===a.lpn);
+          if (l){ l.qty = Math.max(0, l.qty - q); if (l.qty<=0) l.status='dispatched'; }   // issue stock (mock commit)
+          // F17b — mis-pick guard: scanned/typed location must equal the allocated from (id or its structured code)
+          const typed = String(scanOf[a.lpn]||'').trim();
+          const override = !!typed && typed!==a.from && typed!==(loc(a.from).structured||a.from) && typed!==locName(a.from);
+          // C1 — per-LPN dispatch audit txn (issued out of inventory)
+          logTxn({ type:'dispatch', lpn:a.lpn, product:line.product, qty:q, from:a.from, to:'(shipped)', site:cur.site,
+                   user:currentUser(), ref:cur.id, note:`Dispatch ${shipId}${override?' · ⚠ manual override (scanned '+typed+' ≠ allocated '+(loc(a.from).structured||a.from)+')':''}` });
+          return { lpn:a.lpn, lot:a.lot, expiry:a.expiry, from:a.from, qty:a.qty, picked:q, serials:a.serials };
+        });
+        line.shipped = (line.shipped||0) + linePicked;
+        shipLines.push({ product:line.product, picked:linePicked, alloc:allocCopy });
+      });
+      (cur.shipments = cur.shipments || []).push({ id:shipId, date:TODAY, carrier, lines:shipLines });
+      cur.lines.forEach(line => { line.alloc = []; });     // current round consumed; remainder (if any) re-allocates
+
+      // remainder policy: complete → dispatched; else back-order (partial) or short-close (dispatched)
+      const complete = outboundComplete(cur);
+      const backorder = !complete && clientAllowsBackorder(cur.client);
+      cur.status = backorder ? 'partial' : 'dispatched';
+      cur.dispatched = TODAY;
+      if (!complete && !backorder) cur.shortClosed = true;
+      const t = outTotals(cur);
+      const tail = complete
+        ? `Order complete.`
+        : backorder
+          ? `<b>${t.remaining}</b> unit(s) <b>back-ordered</b> for ${esc(dbName('clients',cur.client))} — the order stays open (status <b>partial</b>) and re-allocates when stock arrives.`
+          : `Remainder of <b>${t.remaining}</b> unit(s) <b>short-closed</b> (cancelled) — ${esc(dbName('clients',cur.client))} does not back-order.`;
+      $('dp-banner').innerHTML = `<b>${esc(cur.id)}</b>: <b>${issued}</b> unit(s) dispatched and removed from inventory (delivery note <span class="mono">${esc(shipId)}</span>). ${tail} View the <a href="erp-so-note.html?note=${esc(shipId)}">Delivery note ›</a>.`;
+      $('dp-banner').style.display='block';
+      cur=null; renderList(); show('list');
+    }
+
+    function openDispatch(id){ const o=DB.outbound.find(x=>x.id===id); if(!o) return; renderDetail(o); show('detail'); }
+
+    /* ---- view toggle + filter ---- */
+    function show(v){ $('view-list').style.display=v==='list'?'':'none'; $('view-detail').style.display=v==='detail'?'':'none'; window.scrollTo(0,0); }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ---- init ---- */
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-site').innerHTML   = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; renderList(); });
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; renderList(); });
+    $('f-ref').addEventListener('input',     e=>{ state.ref=e.target.value.trim().toLowerCase(); renderList(); });
+
+    renderList();
+    // deep-link: ?out=<id> opens that order's pick/dispatch directly
+    const urlOut = new URLSearchParams(location.search).get('out');
+    if (urlOut){ const o=DB.outbound.find(x=>x.id===urlOut); if(o && ['allocated','picking','picked'].includes(o.status)){ state.site=o.site; $('f-site').value=o.site; renderList(); openDispatch(urlOut); } }
+  </script>
+</body></html>

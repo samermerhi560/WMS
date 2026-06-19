@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Physical Inventory — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="inv-physical" data-erp-title="Inventory Ops"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Inventory Ops › Physical Inventory">
+  <div id="page-content">
+
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+      .badge.b-open   { border-color:#9a9a9a; background:#f1f1f1; color:#555; }
+      .badge.b-frozen { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .badge.b-closed { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .freeze-note { display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:var(--radius); margin-bottom:14px; font-size:13px; }
+      .freeze-note.frozen { background:#e7eef6; border:1px solid #7e9fc4; color:#2c4a6b; }
+      .freeze-note.thaw   { background:var(--fill); border:1px solid var(--line); color:var(--ink-soft); }
+      .loc-block { border:1px solid var(--line-soft); border-radius:var(--radius); background:var(--white); padding:12px 14px; margin-bottom:12px; }
+      .loc-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+      .loc-head .code { font-weight:700; font-family:ui-monospace,Menlo,Consolas,monospace; }
+      .loc-head .right { margin-left:auto; }
+      .pill { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); }
+      .pill.counted { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .pill.pending { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      table.ln { width:100%; border-collapse:collapse; }
+      table.ln th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); border-bottom:1.5px solid var(--line); padding:5px 8px; }
+      table.ln td { padding:6px 8px; border-bottom:1px solid var(--line-soft); font-size:13px; }
+      table.ln .num { text-align:right; } table.ln input { max-width:90px; }
+      .var-pos{color:#235c25;font-weight:700}.var-neg{color:#b03030;font-weight:700}.var-zero{color:var(--ink-faint)}
+      .act-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+      .act-bar .right { margin-left:auto; display:flex; gap:8px; }
+      .req-note { font-size:12px; color:var(--ink-soft); }
+      .progress { height:6px; background:var(--line-soft); border-radius:3px; overflow:hidden; min-width:120px; flex:1; max-width:260px; }
+      .progress .bar { height:100%; background:var(--brand); }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+      <div class="page-head"><h1>Physical Inventory</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn btn-primary" onclick="openNew()">+ New stock-take</button></div>
+      </div>
+      <p class="sub">A full stock-take over a whole <b>site</b> or a single <b>Storage Area</b>: <b>freeze</b> the scope
+        (blocks putaway, moves and outbound allocation), count every location, reconcile the variances, then
+        <b>unfreeze</b>. Posting corrects stock to the counted figures and writes the audit trail.</p>
+
+      <div class="tabs" id="tabs"></div>
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site</span><select id="f-site"></select></label>
+          <label class="field" id="f-since-wrap"><span>Since date <span class="req">*</span></span><input type="date" id="f-since"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:28px">⚙</th><th>ID</th><th>Created</th><th>Scope</th>
+          <th>Frozen</th><th>Progress</th><th>Status</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== DETAIL ===================== -->
+    <div id="view-detail" style="display:none">
+      <div class="page-head"><h1 id="d-title">Stock-take</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Back</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to stock-take list</a></div>
+      <div class="panel">
+        <fieldset><legend>Stock-take</legend><div class="sum-grid" id="d-summary"></div></fieldset>
+        <div id="d-freeze"></div>
+        <div id="d-locations"></div>
+        <div class="act-bar" id="d-actions"></div>
+      </div>
+    </div>
+
+    <!-- ===================== CREATE — new stock-take (site or single Storage Area) ===================== -->
+    <div id="view-form" style="display:none">
+      <div class="page-head"><h1>New stock-take</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to stock-take list</a></div>
+      <div class="panel">
+        <fieldset><legend>Scope</legend>
+          <div class="field-row">
+            <label class="field"><span>Site</span><select id="n-site"></select></label>
+            <label class="field"><span>Scope</span><select id="sc-scope">
+              <option value="site">Whole site</option><option value="area">Single Storage Area</option></select></label>
+            <label class="field" id="sc-area-wrap"><span>Storage Area</span><select id="sc-area"></select></label>
+            <label class="field"><span>Counted by</span><input id="n-by" value="Benjamin Felix"></label>
+          </div>
+          <div class="freeze-note thaw" id="sc-preview" style="margin-top:4px;display:block"></div>
+          <p class="req-note">Every active storage location in scope is included — <b>empty bins too</b> (counted as confirm-empty). The system quantity per plate is snapshotted now.</p>
+        </fieldset>
+        <div class="act-bar">
+          <span class="req-note">Creating builds an <b>open</b> stock-take (stock still moves). <b>Freeze</b> it on the next screen to block movement and begin counting.</span>
+          <span class="right"><button class="btn btn-outline" onclick="show('list')">Cancel</button>
+            <button class="btn btn-primary" id="create-btn" onclick="createTake()">Create stock-take</button></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-16';
+    const SINCE_DEFAULT = '2026-05-17';   // 30 days before mock "today" (2026-06-16) — caps how far back history loads
+    const state = { site:'S-LYON', tab:'all', since:SINCE_DEFAULT };
+    let cur = null;
+    // Closed stock-takes accumulate → mandatory Since date; Open/Frozen tabs never need it (must always see active events).
+    const SINCE_TERMINAL = s => s==='closed';
+    function needSince(){ return state.tab!=='open' && state.tab!=='frozen'; }
+
+    const pBadge = s => `<span class="badge b-${s}">${s}</span>`;
+    const scopeText = p => p.scope==='site' ? `Whole site` : esc((areaInfo(p.site,p.area)||{}).name || ('Area '+p.area));
+    const counted = p => p.locations.filter(l=>l.status==='counted').length;
+    const allCounted = p => p.locations.every(l=>l.status==='counted');
+    const netVar = p => p.locations.reduce((s,l)=>s+l.lines.reduce((a,x)=>a+((x.countedQty==null?x.systemQty:x.countedQty)-x.systemQty),0),0);
+    const varCell = v => v>0?`<span class="var-pos">+${v}</span>`:v<0?`<span class="var-neg">${v}</span>`:`<span class="var-zero">0</span>`;
+
+    /* ============================================================ LIST */
+    function renderTabs(){
+      const c = k => DB.physicals.filter(p=>p.site===state.site && (k==='all'||p.status===k)).length;
+      const tabs=[['open','Open'],['frozen','Frozen / counting'],['closed','Closed'],['all','All']];
+      $('tabs').innerHTML = tabs.map(([k,l])=>`<a href="#" class="${k===state.tab?'active':''}" onclick="setTab('${k}');return false">${l} <span class="muted">(${c(k)})</span></a>`).join('');
+      $('f-since-wrap').style.display = needSince()?'':'none';
+    }
+    function setTab(k){ state.tab=k; renderTabs(); renderList(); }
+    function renderList(){
+      if (needSince() && !state.since){ $('rows').innerHTML=`<tr><td colspan="8" class="muted" style="padding:18px">Set a <b>Since date</b> above to load ${state.tab==='all'?'':state.tab+' '}history (bounded for performance).</td></tr>`; $('list-summary').textContent=''; return; }
+      const list = DB.physicals.filter(p=>p.site===state.site && (state.tab==='all'||p.status===state.tab)
+          && !(needSince() && SINCE_TERMINAL(p.status) && (p.created||'') < state.since))
+        .sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+      $('rows').innerHTML = list.length ? list.map(p=>{
+        const tot=p.locations.length, cnt=counted(p), pct=tot?Math.round(cnt/tot*100):0;
+        return `<tr><td class="dots">⋮</td>
+          <td class="mono"><a href="#" onclick="open_('${p.id}');return false">${p.id}</a></td>
+          <td>${esc(p.created)}</td><td>${esc(scopeText(p))}</td>
+          <td>${p.frozen?'<span class="pill counted">frozen</span>':'<span class="pill pending">no</span>'}</td>
+          <td><div style="display:flex;align-items:center;gap:8px"><div class="progress"><div class="bar" style="width:${pct}%"></div></div><span class="muted">${cnt}/${tot}</span></div></td>
+          <td>${pBadge(p.status)}</td>
+          <td><a href="#" onclick="open_('${p.id}');return false">${p.status==='closed'?'View':'Open ›'}</a></td></tr>`;
+      }).join('') : `<tr><td colspan="8" class="muted" style="padding:18px">No stock-takes at ${dbName('sites',state.site)}.</td></tr>`;
+      $('list-summary').textContent = `${list.length} shown · ${DB.physicals.filter(p=>p.site===state.site&&p.frozen).length} frozen at ${dbName('sites',state.site)}`;
+    }
+
+    /* ============================================================ DETAIL */
+    function open_(id){ cur = DB.physicals.find(p=>p.id===id); if(!cur) return; renderDetail(); show('detail'); }
+    function renderDetail(){
+      const p=cur;
+      $('d-title').textContent=`Stock-take ${p.id}`;
+      $('d-summary').innerHTML=[['ID',p.id],['Site',dbName('sites',p.site)],['Scope',scopeText(p)],
+        ['Created',p.created],['By',p.by||'—'],['Locations',p.locations.length],
+        ['Counted',`${counted(p)}/${p.locations.length}`],['Net variance',(netVar(p)>0?'+':'')+netVar(p)],['Status',p.status]]
+        .map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')
+        + `<div style="grid-column:1/-1">${photoField({ ref:p.id, level:'header', title:'Stock-take evidence (optional)', readonly:p.status==='closed' })}</div>`
+        + `<div style="grid-column:1/-1">${noteField({ ref:p.id, level:'header', title:'Stock-take notes (optional)', readonly:p.status==='closed' })}</div>`;
+
+      $('d-freeze').innerHTML = p.frozen
+        ? `<div class="freeze-note frozen">🔒 <b>Scope frozen.</b> Putaway, moves and outbound allocation are blocked across ${esc(scopeText(p))} until this stock-take is posted and unfrozen.</div>`
+        : p.status==='closed'
+          ? `<div class="freeze-note thaw">🔓 Unfrozen — stock-take closed ${esc(p.closed||'')}. Normal operations resumed.</div>`
+          : `<div class="freeze-note thaw">🔓 Not yet frozen. Freeze the scope to block movement and begin counting.</div>`;
+
+      const editable = p.frozen && p.status!=='closed';
+      $('d-locations').innerHTML = p.locations.map((L,i)=>{
+        const lc=DB.locations.find(x=>x.id===L.loc)||{};
+        const editing = editable && L.status!=='counted';
+        const body = L.lines.length ? `<table class="ln"><thead><tr><th>LPN</th><th>Product</th><th class="num">System</th><th class="num">Counted</th><th class="num">Variance</th></tr></thead><tbody>`+
+          L.lines.map((ln,j)=>{
+            if(ln.found){ const cvf=ln.countedQty==null?'':ln.countedQty;
+              return `<tr><td><span style="font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid #6fae72;background:#e6f3e7;color:#235c25">found</span></td>
+                <td>${editing?`<select id="p-${i}-${j}">${foundProdOpts(ln.product)}</select>`:esc(prodName(ln.product))}</td>
+                <td class="num">0</td>
+                <td class="num">${editing?`<input type="number" min="1" id="c-${i}-${j}" value="${cvf}">`:(ln.countedQty==null?'—':ln.countedQty)}</td>
+                <td class="num">${L.status==='counted'?varCell(ln.countedQty||0):(editing?`<a href="#" onclick="rmFoundP(${i},${j});return false" title="remove">×</a>`:'<span class="var-zero">—</span>')}</td></tr>`; }
+            const cv=ln.countedQty==null?'':ln.countedQty; const d=(ln.countedQty==null?ln.systemQty:ln.countedQty)-ln.systemQty;
+            const missTag=(L.status==='counted'&&ln.countedQty===0&&ln.systemQty>0)?' <span style="font-size:10px;padding:1px 6px;border-radius:9px;border:1px solid #c47e7e;background:#f6e7e7;color:#7a2c2c">missing</span>':'';
+            return `<tr><td class="mono">${esc(ln.lpn)}</td><td>${esc(prodName(ln.product))}${missTag}</td><td class="num">${ln.systemQty}</td>
+              <td class="num">${editing ? `<input type="number" min="0" id="c-${i}-${j}" value="${cv===''?ln.systemQty:cv}">` : (ln.countedQty==null?'—':ln.countedQty)}</td>
+              <td class="num">${L.status==='counted'?varCell(d):'<span class="var-zero">—</span>'}</td></tr>`; }).join('')+`</tbody></table>`
+          : `<p class="req-note" style="margin:4px 0">No system stock in this location — confirm it is empty${editing?', or add a found plate below':''}.</p>`;
+        const action = !editable ? ''
+          : L.status==='counted'
+            ? `<button class="btn btn-sm btn-outline" onclick="recount(${i})">Recount</button>`
+            : `<button class="btn btn-sm btn-primary" onclick="saveCount(${i})">${L.lines.length?'Save count':'Confirm empty'}</button>`;
+        const foundLink = editing ? `<div style="margin-top:6px"><a href="#" onclick="addFoundP(${i});return false" style="font-size:12px">+ found plate (physically here, not in the system)</a></div>` : '';
+        return `<div class="loc-block">
+          <div class="loc-head"><span class="code">${esc(lc.structured||L.loc)}</span>
+            ${lc.area?`<span class="pill">Area ${esc(lc.area)}</span>`:''}
+            <span class="pill ${L.status}">${L.status}</span>
+            <span class="right">${photoField({ ref:`${p.id}:${L.loc}`, level:'line', readonly:p.status==='closed' })} ${noteField({ ref:`${p.id}:${L.loc}`, level:'line', readonly:p.status==='closed' })} ${action}</span></div>
+          ${body}${foundLink}</div>`;
+      }).join('');
+
+      // bottom actions by lifecycle
+      let acts='';
+      if (p.status==='open'){
+        acts = `<span class="req-note">Freezing blocks all movement in ${esc(scopeText(p))} so the count is taken against a stable snapshot.</span>
+          <span class="right"><button class="btn btn-primary" onclick="freeze()">🔒 Freeze scope &amp; begin</button></span>`;
+      } else if (p.status==='frozen'){
+        const ready=allCounted(p);
+        acts = `<span class="req-note">${ready?`All ${p.locations.length} location(s) counted — review the net variance, then post.`:`${counted(p)}/${p.locations.length} location(s) counted. Count the rest to reconcile.`}</span>
+          <span class="right">
+            <button class="btn btn-outline" onclick="abandon()">Abandon &amp; unfreeze</button>
+            <button class="btn btn-primary" id="post-btn" onclick="post()" ${ready?'':'disabled'}>Post corrections &amp; unfreeze</button></span>`;
+      } else {
+        acts = `<span class="req-note">Closed ${esc(p.closed||'')} — variances reconciled and scope unfrozen.</span>`;
+      }
+      $('d-actions').innerHTML = acts;
+    }
+
+    function freeze(){ cur.frozen=true; cur.status='frozen'; banner(`<b>${cur.id}</b> frozen — ${esc(scopeText(cur))} blocked for counting.`); renderTabs(); renderDetail(); }
+    // FOUND stock during a stock-take — a plate physically present at the bin with no system LPN (minted on post).
+    function foundProdOpts(sel){ return `<option value="">— product —</option>`+DB.products.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${esc(p.name)} (${esc(p.sku)})</option>`).join(''); }
+    function addFoundP(i){ const L=cur.locations[i]; if(!L) return; L.lines.push({ lpn:'', found:true, product:'', systemQty:0, countedQty:'' }); renderDetail(); }
+    function rmFoundP(i,j){ const L=cur.locations[i]; if(L && L.lines[j] && L.lines[j].found){ L.lines.splice(j,1); renderDetail(); } }
+    function saveCount(i){
+      const L=cur.locations[i];
+      for(let j=0;j<L.lines.length;j++){ const ln=L.lines[j]; if(ln.found){ const ps=$(`p-${i}-${j}`); if(ps) ln.product=ps.value; if(!ln.product){ alert('Pick a product for each found plate (or remove it).'); return; } } }
+      L.lines.forEach((ln,j)=>{ const el=$(`c-${i}-${j}`); if(el) ln.countedQty=Math.max(0,+el.value||0); });
+      if(L.lines.some(ln=>ln.found && !(ln.countedQty>0))){ alert('Enter a quantity (>0) for each found plate.'); return; }
+      L.status='counted'; renderDetail();
+    }
+    function recount(i){ cur.locations[i].status='pending'; cur.locations[i].lines=cur.locations[i].lines.filter(ln=>!ln.found); cur.locations[i].lines.forEach(ln=>ln.countedQty=null); renderDetail(); }
+    function abandon(){ if(!confirm('Abandon this stock-take and unfreeze without posting any corrections?')) return;
+      cur.frozen=false; cur.status='closed'; cur.closed=TODAY; banner(`<b>${cur.id}</b> abandoned — unfrozen, no corrections posted.`); renderTabs(); renderList(); show('list'); }
+    function post(){
+      if(!allCounted(cur)) return;
+      let corrected=0;
+      cur.locations.forEach(L=>L.lines.forEach(ln=>{
+        if(ln.found && !ln.lpn){            // found stock — mint a new available plate at the bin
+          const client=(DB.products.find(p=>p.id===ln.product)||{}).client||''; const id=nextLpnId();
+          DB.lpns.push({ id, client, site:cur.site, product:ln.product, qty:ln.countedQty||0, lot:'', expiry:'', serials:[], status:'available', loc:L.loc }); ln.lpn=id;
+          logTxn({type:'count',lpn:id,product:ln.product,qty:ln.countedQty||0,from:L.loc,site:cur.site,user:cur.by,ref:cur.id,note:`Physical inventory — found stock, minted ${id} (${ln.countedQty}) @ ${locName(L.loc)}`}); corrected++; return; }
+        const lp=lpnById(ln.lpn); if(lp && ln.countedQty!=null && lp.qty!==ln.countedQty){ const b=lp.qty; lp.qty=ln.countedQty;
+        logTxn({type:'count',lpn:lp.id,product:lp.product,qty:ln.countedQty-b,from:L.loc,site:cur.site,user:cur.by,ref:cur.id,note:`Physical inventory ${b}→${ln.countedQty} @ ${locName(L.loc)}${ln.countedQty===0?' (missing)':''}`}); corrected++; } }));
+      cur.frozen=false; cur.status='closed'; cur.closed=TODAY;
+      banner(`<b>${cur.id}</b> posted &amp; unfrozen — ${corrected} plate(s) corrected across ${cur.locations.length} location(s).`);
+      renderTabs(); renderList(); show('list');
+    }
+
+    /* ============================================================ CREATE — new stock-take */
+    const storLocs = site => DB.locations.filter(l=>l.site===site && l.type==='storage' && l.status==='active');
+    const platesAt = (site,loc) => onHandLpns(site).filter(l=>l.loc===loc && l.status!=='in-transit');  // physically present
+    function nextPhysId(){ let n=7000; DB.physicals.forEach(p=>{ const m=/PHY-(\d+)/.exec(p.id); if(m) n=Math.max(n,+m[1]); }); return 'PHY-'+(n+1); }
+
+    function openNew(){
+      show('form');
+      $('n-site').value=state.site; if($('n-site')._ssSync)$('n-site')._ssSync();
+      $('sc-scope').value='site'; if($('sc-scope')._ssSync)$('sc-scope')._ssSync();
+      $('n-by').value='Benjamin Felix';
+      fillScopeAreas(); updateScopeUI();
+    }
+    function fillScopeAreas(){
+      const areas=siteAreas($('n-site').value);
+      $('sc-area').innerHTML = areas.length ? areas.map(a=>`<option value="${a.code}">${esc(a.name||('Area '+a.code))}</option>`).join('') : `<option value="">— no areas defined —</option>`;
+      if($('sc-area')._ssSync)$('sc-area')._ssSync();
+    }
+    function scopeLocs(){
+      const site=$('n-site').value;
+      let locs=storLocs(site);
+      if($('sc-scope').value==='area'){ const a=$('sc-area').value; locs=locs.filter(l=>l.area===a); }
+      return locs;
+    }
+    // Active (open/frozen) stock-takes at this site that share ANY location with the chosen scope.
+    // Two active takes over the same bins would double-freeze and post conflicting corrections → blocked.
+    function conflictingTakes(){
+      const site=$('n-site').value;
+      const wanted=new Set(scopeLocs().map(l=>l.id));
+      return DB.physicals.filter(p=> p.site===site && (p.status==='open'||p.status==='frozen')
+        && (p.locations||[]).some(L=>wanted.has(L.loc)));
+    }
+    function updateScopeUI(){
+      $('sc-area-wrap').style.display = $('sc-scope').value==='area' ? '' : 'none';
+      renderScopePreview();
+    }
+    function renderScopePreview(){
+      const site=$('n-site').value, locs=scopeLocs();
+      if(!locs.length){ $('sc-preview').innerHTML=`<span class="var-neg">No active storage locations in this scope — nothing to count.</span>`; $('create-btn').disabled=true; return; }
+      const plates=locs.reduce((s,l)=>s+platesAt(site,l.id).length,0);
+      const empty=locs.filter(l=>platesAt(site,l.id).length===0).length;
+      let html = `In scope: <b>${locs.length}</b> location(s) · <b>${plates}</b> plate(s) to count${empty?` · <b>${empty}</b> empty bin(s) to confirm`:''}.`;
+      const conf=conflictingTakes();
+      if(conf.length){
+        const wanted=new Set(locs.map(l=>l.id)); const overlap=new Set();
+        conf.forEach(p=>(p.locations||[]).forEach(L=>{ if(wanted.has(L.loc)) overlap.add(L.loc); }));
+        html += `<br><span class="var-neg">⚠ ${overlap.size} of these location(s) are already in an active stock-take: ${conf.map(p=>esc(p.id)+' ('+p.status+')').join(', ')}. Close or abandon it first.</span>`;
+      }
+      $('sc-preview').innerHTML = html;
+      $('create-btn').disabled = conf.length>0;     // block overlapping active scopes
+    }
+    function createTake(){
+      const site=$('n-site').value, scope=$('sc-scope').value, locs=scopeLocs();
+      if(!locs.length){ alert('No active storage locations in this scope.'); return; }
+      const conf=conflictingTakes();   // hard guard — no two active stock-takes may share a location
+      if(conf.length){ alert(`Cannot create — ${conf.map(p=>p.id+' ('+p.status+')').join(', ')} already covers location(s) in this scope. Close or abandon it first.`); return; }
+      const p={ id:nextPhysId(), site, scope, area: scope==='area'?$('sc-area').value:'',
+        status:'open', frozen:false, created:TODAY, by:($('n-by').value.trim()||'—'),
+        locations: locs.map(l=>({ loc:l.id, status:'pending',
+          lines: platesAt(site,l.id).map(pl=>({ lpn:pl.id, product:pl.product, systemQty:pl.qty, countedQty:null })) })) };
+      DB.physicals.push(p);
+      state.site=site; state.tab='open'; $('f-site').value=site; if($('f-site')._ssSync)$('f-site')._ssSync();
+      banner(`<b>${p.id}</b> created (open) — ${esc(scopeText(p))}, ${p.locations.length} location(s). Freeze the scope to begin counting.`);
+      renderTabs(); cur=p; renderDetail(); show('detail');
+    }
+
+    function show(v){ ['list','detail','form'].forEach(x=>$('view-'+x).style.display = x===v?'':'none'); window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-site').innerHTML = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-site').addEventListener('change',e=>{ state.site=e.target.value; renderTabs(); renderList(); });
+    $('f-since').value = SINCE_DEFAULT;
+    $('f-since').addEventListener('change',e=>{ state.since=e.target.value; renderList(); });
+    $('n-site').innerHTML = $('f-site').innerHTML;
+    $('n-site').addEventListener('change', ()=>{ fillScopeAreas(); updateScopeUI(); });
+    $('sc-scope').addEventListener('change', updateScopeUI);
+    $('sc-area').addEventListener('change', renderScopePreview);
+    renderTabs(); renderList();
+  </script>
+</body></html>

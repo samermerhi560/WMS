@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reason Codes — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-reasons" data-erp-title="Master Data"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Reason Codes">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .rc-group { border:1px solid var(--line-soft); border-radius:var(--radius); padding:12px 14px; margin-bottom:14px; background:var(--white); }
+      .rc-group > .gh { display:flex; align-items:baseline; gap:10px; margin-bottom:10px; }
+      .rc-group > .gh .ttl { font-weight:700; font-size:14px; }
+      .rc-group > .gh .gk  { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .rc-list { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+      .rc-chip { display:inline-flex; align-items:center; gap:8px; font-size:12.5px;
+        border:1px solid var(--line); border-radius:16px; padding:4px 6px 4px 12px; background:var(--fill); color:var(--ink); }
+      .rc-chip .rm { cursor:pointer; color:var(--ink-faint); border:none; background:transparent; font-size:14px; line-height:1; padding:0 4px; }
+      .rc-chip .rm:hover { color:var(--bad); }
+      .rc-empty { color:var(--ink-faint); font-size:12.5px; font-style:italic; margin-bottom:10px; }
+      .rc-add { display:flex; gap:8px; align-items:center; max-width:480px; }
+      .rc-add input { flex:1; }
+      .domain-note { font-size:12.5px; color:var(--ink-soft); margin:0 0 14px; }
+      .feeds { font-size:12px; color:var(--ink-faint); }
+      .feeds code { background:var(--fill-2); padding:1px 5px; border-radius:3px; }
+    </style>
+
+    <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+    <div class="page-head"><h1>Reason Codes</h1>
+      <span class="muted" id="head-sum" style="align-self:center"></span>
+      <div class="acts"><button class="btn" disabled>Export</button></div>
+    </div>
+    <p class="sub">Master list of the reason codes operators must pick when they change stock status, adjust quantity,
+      correct an attribute, or process a return. Editing a list here changes what those screens offer — for status
+      changes the reasons are linked to the <b>target status</b>, so the operator only ever sees logical choices.</p>
+
+    <div class="tabs" id="tabs"></div>
+
+    <div class="panel">
+      <p class="domain-note" id="domain-note"></p>
+      <div id="groups"></div>
+      <p class="feeds" id="feeds"></p>
+      <div id="e-notes" style="margin:10px 0"></div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+    let curDomain = (DB.reasonDomains[0]||{}).id;
+
+    const FEEDS = {
+      status:  'Feeds the <b>Stock Status</b> screen — the reason dropdown is filtered by the target status.',
+      adjust:  'Feeds <b>Adjustments &amp; Corrections</b> — quantity adjustments, filtered by direction (increase / decrease).',
+      correct: 'Feeds <b>Adjustments &amp; Corrections</b> — attribute corrections (wrong lot / expiry / serial / product / owning client).',
+      return:  'Feeds <b>Returns / put-back</b> — disposition of stock re-entering inventory.',
+    };
+
+    function renderTabs(){
+      $('tabs').innerHTML = DB.reasonDomains.map(d =>
+        `<a href="#" class="${d.id===curDomain?'active':''}" onclick="selDomain('${d.id}');return false">${esc(d.label)}</a>`).join('');
+    }
+    function selDomain(id){ curDomain = id; renderTabs(); renderGroups(); }
+
+    function renderGroups(){
+      const d = DB.reasonDomains.find(x=>x.id===curDomain); if (!d) return;
+      $('domain-note').innerHTML = d.groupedBy
+        ? `Grouped by <b>${esc(d.groupedBy)}</b>. Add or remove the reasons offered for each group.`
+        : `A single shared list of reasons. Add or remove as needed.`;
+      $('feeds').innerHTML = '↳ ' + (FEEDS[d.id]||'');
+      $('groups').innerHTML = d.groups.map(g=>{
+        const chips = g.reasons.length
+          ? `<div class="rc-list">${g.reasons.map(r=>`<span class="rc-chip">${esc(r)}
+              <button class="rm" title="Remove" onclick="rm('${g.key}',this.dataset.r)" data-r="${esc(r)}">✕</button></span>`).join('')}</div>`
+          : `<p class="rc-empty">No reasons yet — add the first one below.</p>`;
+        const showHead = d.groupedBy || d.groups.length>1;
+        return `<div class="rc-group">
+          ${showHead?`<div class="gh"><span class="ttl">${esc(g.label)}</span><span class="gk">${esc(g.reasons.length)} reason(s)</span></div>`:''}
+          ${chips}
+          <div class="rc-add">
+            <input id="add-${esc(g.key)}" placeholder="Add a reason…" onkeydown="if(event.key==='Enter'){add('${g.key}');}">
+            <button class="btn btn-outline btn-sm" onclick="add('${g.key}')">Add</button>
+          </div>
+        </div>`;
+      }).join('');
+      const total = DB.reasonDomains.reduce((s,dom)=>s+dom.groups.reduce((a,g)=>a+g.reasons.length,0),0);
+      $('head-sum').textContent = `${DB.reasonDomains.length} domain(s) · ${total} reason(s) total`;
+      $('e-notes').innerHTML = noteField({ ref: 'REASONS-'+curDomain, level:'header', title:'Notes (optional)' });
+    }
+
+    function add(groupKey){
+      const inp = $('add-'+groupKey); const t = inp.value.trim();
+      if (!t) return;
+      if (addReason(curDomain, groupKey, t)){ inp.value=''; flash(`Added “${t}”.`); renderGroups(); }
+      else { flash(`“${t}” already exists in this list.`, true); }
+    }
+    function rm(groupKey, text){
+      if (!confirm(`Remove reason “${text}”?\n\nOperators will no longer be offered it on the linked screen(s).`)) return;
+      if (removeReason(curDomain, groupKey, text)){ flash(`Removed “${text}”.`); renderGroups(); }
+    }
+    function flash(msg, warn){
+      $('banner').innerHTML = (warn?'⚠ ':'✓ ') + esc(msg) + ' <span class="muted">(mock — session only)</span>';
+      $('banner').style.display='block';
+    }
+
+    renderTabs(); renderGroups();
+  </script>
+</body></html>

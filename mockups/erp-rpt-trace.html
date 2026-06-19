@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lot / Serial Traceability — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-trace" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Lot / Serial Traceability">
+  <div id="page-content">
+    <style>
+      .tt { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tt.t-in { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tt.t-out{ border-color:#9a9a9a; background:#eee;    color:#444; }
+      .tt.t-mv { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tt.t-adj{ border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .subj { display:flex; gap:26px; flex-wrap:wrap; font-size:13px; }
+      .subj b { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); font-weight:600; }
+      /* vertical timeline */
+      .tl { list-style:none; margin:0; padding:0; }
+      .tl li { position:relative; padding:0 0 14px 22px; border-left:2px solid var(--line-soft); }
+      .tl li:last-child { border-left-color:transparent; }
+      .tl li::before { content:''; position:absolute; left:-7px; top:3px; width:12px; height:12px; border-radius:50%; background:var(--brand); border:2px solid #fff; box-shadow:0 0 0 1px var(--line); }
+      .tl .when { font-size:12px; color:var(--ink-faint); }
+      .print-only.phead { margin-bottom:10px; }
+    </style>
+
+    <div class="print-only phead"><h1 id="p-title">Lot / Serial Traceability</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Lot / Serial Traceability</h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">Recall &amp; genealogy — trace a single lot or serial across its whole life
+      (receive → putaway → move → pick → dispatch → return). Reads the <code>DB.txns[]</code> ledger keyed
+      to the plates carrying that lot / serial.</p>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Trace subject</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>Trace by</span><select id="f-mode">
+          <option value="lot">Lot / batch</option>
+          <option value="serial">Serial</option>
+        </select></label>
+        <label class="field"><span>Product (narrows lots)</span><select id="f-product"></select></label>
+        <label class="field" id="lot-field"><span>Lot</span><select id="f-lot"></select></label>
+        <label class="field" id="serial-field" style="display:none"><span>Serial</span><input id="f-serial" placeholder="e.g. SN-401"></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel" id="subject" style="margin-bottom:14px"></div>
+
+    <div class="row">
+      <div class="col" style="min-width:380px">
+        <div class="panel">
+          <h3 style="margin:0 0 10px">Event timeline</h3>
+          <ul class="tl" id="timeline"></ul>
+        </div>
+      </div>
+      <div class="col" style="min-width:340px">
+        <div class="panel" style="padding:0">
+          <div style="padding:12px 14px;font-weight:700">Plates carrying this lot / serial</div>
+          <table class="wf"><thead><tr><th>LPN</th><th>Status</th><th>Location</th><th class="num">On-hand</th><th>Notes</th></tr></thead>
+            <tbody id="plates"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const IN_T=['receive','transfer-receive','return'], OUT_T=['dispatch','transfer-ship'], MV_T=['move','putaway'];
+    function tcls(t){ return IN_T.includes(t)?'t-in':OUT_T.includes(t)?'t-out':MV_T.includes(t)?'t-mv':'t-adj'; }
+    const state = { mode:'lot', product:'all', lot:'', serial:'' };
+
+    // distinct lots present on plates (optionally narrowed by product)
+    function lotList(){
+      const set = new Map();
+      DB.lpns.filter(l=>l.lot && (state.product==='all'||l.product===state.product)).forEach(l=>{
+        set.set(l.lot, l.product);
+      });
+      return [...set.entries()].map(([lot,prod])=>({lot,prod})).sort((a,b)=>a.lot.localeCompare(b.lot));
+    }
+    // plates matching the current subject
+    function subjectPlates(){
+      if (state.mode==='lot'){
+        if (!state.lot) return [];
+        return DB.lpns.filter(l=>l.lot===state.lot && (state.product==='all'||l.product===state.product));
+      }
+      const q = state.serial.trim().toLowerCase();
+      if (!q) return [];
+      return DB.lpns.filter(l=>(l.serials||[]).some(s=>String(s).toLowerCase().includes(q)));
+    }
+
+    function render(){
+      const plates = subjectPlates();
+      const ids = new Set(plates.map(p=>p.id));
+      const events = (DB.txns||[]).filter(t=>ids.has(t.lpn)).sort((a,b)=>String(a.ts).localeCompare(String(b.ts)));
+
+      // subject summary
+      const prod = plates[0] ? plates[0].product : null;
+      const onHand = plates.reduce((s,l)=>s+(l.qty||0),0);
+      const locs = [...new Set(plates.map(l=>locName(l.loc)))];
+      const subjLabel = state.mode==='lot' ? (state.lot||'—') : (state.serial||'—');
+      if (!plates.length){
+        $('subject').innerHTML = `<p class="muted" style="margin:0">No plates found for this ${state.mode}. ${state.mode==='serial'?'Try a serial prefix such as <code>SN-401</code>.':''}</p>`;
+      } else {
+        const expiry = plates.find(l=>l.expiry)?.expiry || '';
+        $('subject').innerHTML = `<div class="subj">
+          <div><b>${state.mode==='lot'?'Lot / batch':'Serial'}</b><span class="mono">${esc(subjLabel)}</span></div>
+          <div><b>Product</b>${esc(prodName(prod))}</div>
+          <div><b>Client</b>${esc(dbName('clients',plates[0].client))}</div>
+          ${expiry?`<div><b>Expiry</b>${esc(expiry)}${isExpired({expiry})?' <span class="tt t-out">expired</span>':''}</div>`:''}
+          <div><b>Plates</b>${plates.length}</div>
+          <div><b>On-hand</b>${onHand} unit(s)</div>
+          <div><b>Locations</b>${esc(locs.join(', ')||'—')}</div>
+        </div>`;
+      }
+
+      // KPIs
+      const ins = events.filter(t=>IN_T.includes(t.type)).reduce((s,t)=>s+(t.qty||0),0);
+      const outs = events.filter(t=>OUT_T.includes(t.type)).reduce((s,t)=>s+(t.qty||0),0);
+      $('kpis').innerHTML = `
+        <div class="kpi"><span class="k-label">Plates</span><span class="k-val">${plates.length}</span></div>
+        <div class="kpi"><span class="k-label">On-hand now</span><span class="k-val">${onHand}</span></div>
+        <div class="kpi k-good"><span class="k-label">Units received</span><span class="k-val">${ins}</span></div>
+        <div class="kpi"><span class="k-label">Units issued</span><span class="k-val">${outs}</span></div>
+        <div class="kpi"><span class="k-label">Ledger events</span><span class="k-val">${events.length}</span></div>`;
+
+      // timeline
+      $('timeline').innerHTML = events.length ? events.map(t=>`
+        <li>
+          <div class="when">${esc(t.ts)} · ${esc(t.user||'')}</div>
+          <div><span class="tt ${tcls(t.type)}">${esc(t.type)}</span>
+            <b>${esc(t.lpn)}</b>${t.qty!=null?` · ${t.qty} unit(s)`:''}
+            ${(t.from||t.to)?`<span class="muted"> · ${esc(t.from?locName(t.from):'—')} → ${esc(t.to?locName(t.to):'—')}</span>`:''}</div>
+          <div class="muted" style="font-size:12px">${esc(t.ref||'')}${t.note?` · ${esc(t.note)}`:''}</div>
+        </li>`).join('')
+        : `<li style="border:none;padding-left:0"><span class="muted">No ledger events recorded for this subject yet.</span></li>`;
+
+      // plates table
+      $('plates').innerHTML = plates.length ? plates.map(l=>`
+        <tr>
+          <td class="mono">${l.id}</td>
+          <td>${statusBadge(l.status)}</td>
+          <td class="mono">${esc(locName(l.loc))}</td>
+          <td class="num">${l.qty}</td>
+          <td>${noteFor(l.id) || '<span class="muted">—</span>'}</td>
+        </tr>`).join('')
+        : `<tr><td colspan="5" class="muted" style="padding:14px">—</td></tr>`;
+
+      $('summary').textContent = plates.length ? `${esc(subjLabel)} · ${plates.length} plate(s) · ${events.length} event(s)` : '';
+      $('p-title').textContent = `Traceability — ${subjLabel}`;
+      $('p-filters').textContent = `${state.mode==='lot'?'Lot':'Serial'}: ${subjLabel}  ·  Product: ${state.product==='all'?'All':prodName(state.product)}`;
+    }
+
+    function fillLots(){
+      const lots = lotList();
+      $('f-lot').innerHTML = lots.length
+        ? lots.map(({lot,prod})=>`<option value="${esc(lot)}">${esc(lot)} — ${esc(prodName(prod))}</option>`).join('')
+        : `<option value="">(no lots)</option>`;
+      state.lot = lots.length ? lots[0].lot : '';
+      if (typeof $('f-lot')._ssSync==='function') $('f-lot')._ssSync();
+    }
+    function syncMode(){
+      const lot = state.mode==='lot';
+      $('lot-field').style.display = lot?'':'none';
+      $('serial-field').style.display = lot?'none':'';
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-product').innerHTML = `<option value="all">All products</option>` + DB.products.map(p=>`<option value="${p.id}">${esc(prodName(p.id))}</option>`).join('');
+    fillLots(); syncMode();
+    $('f-mode').addEventListener('change',   e=>{ state.mode=e.target.value; syncMode(); render(); });
+    $('f-product').addEventListener('change',e=>{ state.product=e.target.value; fillLots(); render(); });
+    $('f-lot').addEventListener('change',    e=>{ state.lot=e.target.value; render(); });
+    $('f-serial').addEventListener('input',  e=>{ state.serial=e.target.value; render(); });
+    render();
+  </script>
+</body></html>

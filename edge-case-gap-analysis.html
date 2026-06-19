@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WMS — Status Edge-Case Gap Analysis</title>
+<style>
+  :root{
+    --ink:#1a2230; --ink2:#3c4658; --mut:#6b7688; --line:#e2e6ee; --line2:#eef1f6;
+    --bg:#f6f8fb; --card:#ffffff;
+    --crit:#c0314b; --crit-bg:#fdeef1; --crit-bd:#f3c6d1;
+    --high:#c4641a; --high-bg:#fdf1e7; --high-bd:#f4d6bb;
+    --med:#9a7b14; --med-bg:#fcf7e3; --med-bd:#eee0ad;
+    --low:#5a6573; --low-bg:#f1f3f7; --low-bd:#dde2ea;
+    --gap:#b3263f; --partial:#9a7b14;
+    --blue:#2456a6;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:28px 20px 64px}
+  header.top{border-bottom:2px solid var(--ink); padding-bottom:16px; margin-bottom:22px}
+  .kicker{font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--blue); font-weight:700}
+  h1{font-size:26px; margin:6px 0 4px; letter-spacing:-.01em}
+  .sub{color:var(--mut); font-size:14px; max-width:78ch}
+  .meta{margin-top:10px; font-size:12.5px; color:var(--ink2)}
+  .meta b{color:var(--ink)}
+
+  /* stat strip */
+  .stats{display:flex; flex-wrap:wrap; gap:10px; margin:20px 0 6px}
+  .stat{flex:1 1 130px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px}
+  .stat .n{font-size:24px; font-weight:800; line-height:1}
+  .stat .l{font-size:11.5px; color:var(--mut); text-transform:uppercase; letter-spacing:.06em; margin-top:6px}
+  .stat.c .n{color:var(--crit)} .stat.h .n{color:var(--high)} .stat.m .n{color:var(--med)} .stat.l2 .n{color:var(--low)}
+
+  /* callout */
+  .callout{background:var(--card); border:1px solid var(--line); border-left:4px solid var(--blue);
+           border-radius:8px; padding:14px 16px; margin:20px 0 8px}
+  .callout h3{margin:0 0 8px; font-size:14px}
+  .callout p{margin:6px 0; font-size:13.5px; color:var(--ink2)}
+  .pill{display:inline-block; font-size:11px; font-weight:700; padding:2px 7px; border-radius:20px; vertical-align:middle}
+  .pill.ok{background:#e7f4ec; color:#1f7a44; border:1px solid #c2e4cf}
+  .pill.no{background:var(--crit-bg); color:var(--crit); border:1px solid var(--crit-bd)}
+
+  h2.tier{font-size:14px; letter-spacing:.04em; text-transform:uppercase; margin:30px 0 10px;
+          display:flex; align-items:center; gap:9px}
+  .dot{width:11px; height:11px; border-radius:50%; display:inline-block}
+  .dot.crit{background:var(--crit)} .dot.high{background:var(--high)} .dot.med{background:var(--med)} .dot.low{background:var(--low)}
+  .tier .ct{font-size:12px; color:var(--mut); font-weight:500; letter-spacing:0; text-transform:none}
+
+  .tablewrap{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--card)}
+  table{border-collapse:collapse; width:100%; min-width:860px; font-size:13px}
+  thead th{background:#f0f3f8; text-align:left; padding:9px 12px; font-size:11px; letter-spacing:.05em;
+           text-transform:uppercase; color:var(--ink2); border-bottom:1px solid var(--line); white-space:nowrap}
+  tbody td{padding:11px 12px; border-bottom:1px solid var(--line2); vertical-align:top}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:#fafbfd}
+  .id{font-weight:800; color:var(--mut); font-variant-numeric:tabular-nums; white-space:nowrap}
+  .case{font-weight:700; color:var(--ink)}
+  .case .stage{display:block; font-weight:600; font-size:11px; color:var(--blue); margin-top:3px; text-transform:uppercase; letter-spacing:.04em}
+  .today{color:var(--ink2); font-size:12.5px}
+  .vb{font-size:11px; font-weight:700; padding:2px 8px; border-radius:5px; white-space:nowrap; display:inline-block}
+  .vb.gap{background:var(--crit-bg); color:var(--gap); border:1px solid var(--crit-bd)}
+  .vb.partial{background:var(--med-bg); color:var(--partial); border:1px solid var(--med-bd)}
+  .tag{font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:20px; white-space:nowrap}
+  .tag.new{background:#eaf1fb; color:var(--blue); border:1px solid #cfe0f6}
+  .tag.known{background:var(--low-bg); color:var(--low); border:1px solid var(--low-bd)}
+
+  .col-id{width:46px} .col-v{width:78px} .col-s{width:74px}
+
+  footer{margin-top:34px; padding-top:16px; border-top:1px solid var(--line); font-size:12px; color:var(--mut)}
+  footer b{color:var(--ink2)}
+  .legend{display:flex; flex-wrap:wrap; gap:16px; margin:8px 0}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  code{background:#eef1f6; padding:1px 5px; border-radius:4px; font-size:12px; color:#324; font-family:"SFMono-Regular",Consolas,monospace}
+  @media(max-width:640px){ h1{font-size:22px} .wrap{padding:18px 12px 48px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="kicker">WMS · 3PL Mockup — Pre-Coding Review</div>
+    <h1>Status &amp; Workflow Edge-Case Gap Analysis</h1>
+    <p class="sub">Unhappy-path audit across the four operational workflows — Goods Reception, Putaway,
+      Stock-Out and Inventory Operations — plus the cross-cutting stock lifecycle. Every verdict was
+      checked against the actual screen code and <code>data.js</code>, not just the specs.</p>
+    <p class="meta"><b>Date:</b> 2026-06-19 &nbsp;·&nbsp; <b>Phase:</b> end of Mockup (Phase 2), entering coding (Phase 3)
+      &nbsp;·&nbsp; <b>Method:</b> 4 parallel code audits + spot-verification of every Critical/High finding.</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat c"><div class="n">2</div><div class="l">Critical</div></div>
+    <div class="stat h"><div class="n">6</div><div class="l">High</div></div>
+    <div class="stat m"><div class="n">9</div><div class="l">Medium</div></div>
+    <div class="stat l2"><div class="n">7</div><div class="l">Low</div></div>
+    <div class="stat"><div class="n">24</div><div class="l">Findings total</div></div>
+  </div>
+
+  <div class="callout">
+    <h3>Your two seed examples — verdicts</h3>
+    <p><b>1 · Damaged item found at putaway</b> (change count to bin vs. return as damaged) —
+      <span class="pill ok">ALREADY COVERED</span> This was closed as build-item #7: a
+      <code>⚠ Report damage / reject</code> control now peels a sub-qty to quarantine/hold/damaged before the
+      good remainder is stored (single LPN, both channels). <i>But</i> the same control is <b>missing on mixed-pallet
+      lines</b> (F12) and <b>has no equivalent at pick</b> (F8).</p>
+    <p><b>2 · Refuse a whole reception</b> (find expired/dangerous goods → keep them outside the WH, don't confirm) —
+      <span class="pill no">CONFIRMED GAP</span> There is no "refuse delivery" path. The most severe option,
+      <i>Damaged</i>, still mints an LPN into quarantine <b>inside</b> the building. You cannot turn a truck away and
+      record the refusal (F4).</p>
+  </div>
+
+  <!-- CRITICAL -->
+  <h2 class="tier"><span class="dot crit"></span> Critical <span class="ct">— data-integrity / locked-invariant violations; fix in coding regardless of scope</span></h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th class="col-id">#</th><th>Edge case</th><th>What happens today</th>
+      <th class="col-v">Verdict</th><th class="col-s">Status</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="id">C1</td>
+        <td class="case">Classic ERP dispatch issues stock with no audit row and no re-validation<span class="stage">Stock-Out</span></td>
+        <td class="today"><code>erp-so-dispatch.html</code> / <code>erp-so-fulfil.html</code> commit straight off the saved
+          allocation: <b>no <code>logTxn</code></b> (zero transaction-history trace for back-office shipments) and
+          <b>no re-check of frozen / expired / status</b>. A plate frozen by a stock-take or expired <i>after</i>
+          allocation ships through anyway — violating the locked "freeze enforced cross-screen" rule.</td>
+        <td><span class="vb gap">GAP</span></td>
+        <td><span class="tag known">PART-KNOWN</span></td>
+      </tr>
+      <tr>
+        <td class="id">C2</td>
+        <td class="case">Adjustments &amp; Repack bypass the physical-inventory freeze<span class="stage">Inventory</span></td>
+        <td class="today">The locked rule lists <i>adjustment</i> among actions a freeze must refuse, but
+          <code>erp-inv-adjust.html</code> and <code>erp-inv-repack.html</code> never call <code>isLocFrozen</code>.
+          You can adjust, scrap or repack a plate sitting <b>inside an active frozen stock-take</b> — corrupting the
+          very snapshot the count is reconciling against.</td>
+        <td><span class="vb gap">GAP</span></td>
+        <td><span class="tag known">PART-KNOWN</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- HIGH -->
+  <h2 class="tier"><span class="dot high"></span> High <span class="ct">— real, frequent scenarios with no path today; business / compliance stakes</span></h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th class="col-id">#</th><th>Edge case</th><th>What happens today</th>
+      <th class="col-v">Verdict</th><th class="col-s">Status</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="id">F4</td>
+        <td class="case">Refuse / reject a delivery at the door<span class="stage">Reception</span></td>
+        <td class="today">No "refuse delivery" action. <i>Damaged</i> condition still creates an LPN in quarantine
+          <b>inside</b> the WH. Can't turn a truck away, keep goods outside, and log a reasoned refusal (with
+          supplier/carrier + photos). <i>Your seed example #2.</i></td>
+        <td><span class="vb gap">GAP</span></td>
+        <td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F5</td>
+        <td class="case">Disposal / scrap-out of blocked stock<span class="stage">Lifecycle</span></td>
+        <td class="today">Quarantine/damaged/expired stock has no first-class <b>disposal / destruction</b> workflow.
+          Only recourse is a generic qty-decrease in Adjustments — works, but undiscoverable, self-approvable (see F13),
+          no destruction certificate, leaves a <code>qty:0</code> husk. High ceremony for destroying <i>client-owned</i> goods.</td>
+        <td><span class="vb partial">PARTIAL</span></td>
+        <td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F6</td>
+        <td class="case">Return-to-vendor / return-to-client (RTV)<span class="stage">Stock-Out</span></td>
+        <td class="today">Every outbound path ships to a <i>consignee</i>. There is <b>no way to ship stock back to a
+          supplier or back to the owning client</b>. Rejected lots can only be scrapped, never returned — a routine 3PL
+          flow that's entirely unmodeled.</td>
+        <td><span class="vb gap">GAP</span></td>
+        <td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F7</td>
+        <td class="case">In-transit loss / damage / short-receive<span class="stage">Inventory</span></td>
+        <td class="today">Once a transfer ships it <b>can't be cancelled</b> (cancel is draft-only) and receive forces the
+          <b>full qty to <code>available</code></b> with no short or damaged option. A truck that crashes, or stock that
+          arrives short/damaged, has no write-off or condition path.</td>
+        <td><span class="vb gap">GAP</span></td>
+        <td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F8</td>
+        <td class="case">Damage or missing stock found at pick<span class="stage">Stock-Out</span></td>
+        <td class="today">A picker who pulls a damaged unit, or reaches an empty bin (phantom stock), can only silently
+          <b>short-pick</b>. No reject-to-quarantine, no "stock not found → trigger count/investigation", no re-allocate.
+          Asymmetric with the putaway damage-reject you already added (#7).</td>
+        <td><span class="vb gap">GAP</span></td>
+        <td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F9</td>
+        <td class="case">Expired stock flows to <code>available</code><span class="stage">Reception · Putaway</span></td>
+        <td class="today">Expiry at receipt and putaway is a <b>soft warning only</b>; an already-expired lot can be received
+          and putaway as sellable stock. Only the downstream derived FEFO filter quietly hides it — the plate keeps
+          <code>status:'available'</code> and counts toward capacity (seeded proof: <code>LPN-00022</code>).</td>
+        <td><span class="vb gap">GAP</span></td>
+        <td><span class="tag new">NEW</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- MEDIUM -->
+  <h2 class="tier"><span class="dot med"></span> Medium <span class="ct">— matters, but lower frequency or has a clumsy workaround</span></h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th class="col-id">#</th><th>Edge case</th><th>What happens today</th>
+      <th class="col-v">Verdict</th><th class="col-s">Status</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="id">F10</td>
+        <td class="case">Warehouse-full / no-valid-bin overflow at putaway<span class="stage">Putaway</span></td>
+        <td class="today">When every candidate bin is full/frozen/segregated, the ranked list is empty and the operator is
+          <b>stuck</b> — manual entry re-applies the same blocks. No overflow bin, "park / exception", or escalation.</td>
+        <td><span class="vb gap">GAP</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F3</td>
+        <td class="case">Adjust / transfer silently orphans an allocation<span class="stage">Inventory</span></td>
+        <td class="today">Only Stock-Status warns before touching a reserved plate. Adjustments can decrease a plate
+          <b>below its reserved qty</b>, and a transfer can ship it out, with <b>no warning</b> — orphaning an open order's
+          allocation.</td>
+        <td><span class="vb gap">GAP</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F11</td>
+        <td class="case">No expiry transition + no expired-stock cleanup<span class="stage">Inventory</span></td>
+        <td class="today">Nothing flips <code>available→expired</code> on the date; relies on a manual "select expired"
+          button + the derived filter. Expired plates then hit the F5 no-disposal gap.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F12</td>
+        <td class="case">Mixed-pallet LINE damage reject<span class="stage">Putaway</span></td>
+        <td class="today">The damage-reject control is suppressed for mixed-pallet lines — a damaged line on a pallet must
+          be placed as good. (Extends your seed example #1.)</td>
+        <td><span class="vb gap">GAP</span></td><td><span class="tag known">KNOWN</span></td>
+      </tr>
+      <tr>
+        <td class="id">F13</td>
+        <td class="case">No separation of duties on approvals<span class="stage">Inventory</span></td>
+        <td class="today">Adjustment &amp; count approval never check approver ≠ raiser — the same user can raise and
+          approve their own qty change / scrap. Maker-checker is label-only.</td>
+        <td><span class="vb gap">GAP</span></td><td><span class="tag known">PART-KNOWN</span></td>
+      </tr>
+      <tr>
+        <td class="id">F14</td>
+        <td class="case">Wrong client / site on blind &amp; manual receipt<span class="stage">Reception</span></td>
+        <td class="today">Only the ASN-scan path guards client/site. Blind &amp; manual ERP receipt trusts the dropdowns, so
+          one client's stock can be mis-attributed to another — serious for client-owned 3PL stock.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F15</td>
+        <td class="case">Serial capture on issue is presence-only<span class="stage">Stock-Out</span></td>
+        <td class="today">Serials aren't matched against the allocated set, the count isn't enforced = picked qty, and
+          duplicates aren't caught. Any string ships and lands on the delivery-note appendix unverified.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F16</td>
+        <td class="case">No duplicate-receipt guard<span class="stage">Reception</span></td>
+        <td class="today">No idempotency / delivery-note dedupe — the same physical delivery can be received twice (a
+          closed ASN stays selectable; received qty just adds again).</td>
+        <td><span class="vb gap">GAP</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F17</td>
+        <td class="case">Mis-putaway undo &amp; ERP mis-pick guard<span class="stage">Putaway · Stock-Out</span></td>
+        <td class="today">No undo for a wrong-bin putaway (only a separate, unlinked Move). The ERP dispatch picker has no
+          scan / mis-pick guard (the PWA does) and its "manual override" is never written to the audit log.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F18</td>
+        <td class="case">Cancel / release not reachable mid-flight<span class="stage">Stock-Out</span></td>
+        <td class="today">Release-allocation and cancel-order work, but live only on the Orders <i>list</i> — not on the
+          Allocation / Dispatch / Express detail screens where the operator actually sits.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- LOW -->
+  <h2 class="tier"><span class="dot low"></span> Low <span class="ct">— niche, polish, or mock-only artifacts</span></h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th class="col-id">#</th><th>Edge case</th><th>What happens today</th>
+      <th class="col-v">Verdict</th><th class="col-s">Status</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="id">F19</td>
+        <td class="case">Receipt condition &amp; reasons are hardcoded<span class="stage">Reception</span></td>
+        <td class="today">Only Good / Hold / Damaged, with a baked-in reason list (not master-data driven like Inspection).
+          "Temperature excursion" / "seal broken" aren't selectable conditions.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F20</td>
+        <td class="case">Cold-chain carrier mismatch not checked<span class="stage">Stock-Out</span></td>
+        <td class="today">No check that a 2–8 °C product ships on a cold-chain carrier — any carrier is selectable for any
+          product.</td>
+        <td><span class="vb gap">GAP</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F21</td>
+        <td class="case">Consignee/carrier not re-asserted at ERP dispatch<span class="stage">Stock-Out</span></td>
+        <td class="today">Carrier is mandatory on the PWA but optional in the ERP; consignee is gated at order creation but
+          not re-checked at issue.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F22</td>
+        <td class="case">Over-receipt is unbounded<span class="stage">Reception</span></td>
+        <td class="today">Receiving more than the ASN needs only a reason — no ceiling, tolerance %, or supervisor gate.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F23</td>
+        <td class="case">Hold release has no client sign-off<span class="stage">Inventory</span></td>
+        <td class="today">Any user can release a commercial / legal <i>hold</i> to available with just a reason — typically
+          needs client authorization.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+      <tr>
+        <td class="id">F24</td>
+        <td class="case">GRN not generated per receipt<span class="stage">Reception</span></td>
+        <td class="today">The GRN list is a static array; a freshly confirmed receipt produces no GRN record. Mock artifact —
+          a real document trail removes it in the build.</td>
+        <td><span class="vb gap">GAP</span></td><td><span class="tag known">MOCK</span></td>
+      </tr>
+      <tr>
+        <td class="id">F2b</td>
+        <td class="case">Blind receipt ↔ open ASN split-brain<span class="stage">Reception</span></td>
+        <td class="today">A blind receipt never reconciles against a matching open ASN, so the ASN stays <code>open</code>
+          forever while the stock exists under a separate blind receipt.</td>
+        <td><span class="vb partial">PARTIAL</span></td><td><span class="tag new">NEW</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <footer>
+    <div class="legend">
+      <span><span class="vb gap">GAP</span> no support at all</span>
+      <span><span class="vb partial">PARTIAL</span> half-supported / clumsy workaround</span>
+      <span><span class="tag new">NEW</span> not previously flagged</span>
+      <span><span class="tag known">KNOWN</span> already a noted carry-over</span>
+    </div>
+    <p><b>Priority = real-world frequency × business/compliance impact × how stuck the operator gets.</b> Critical items are
+    data-integrity / locked-invariant violations and should be fixed in coding regardless of feature scope; High → Low are
+    "decide if we build it" workflow choices. <b>Status</b> distinguishes genuinely new findings from items already listed as
+    coding-phase carry-overs in <code>MOCKUP_STATUS.md</code> (so this isn't re-reporting known limitations as new).</p>
+    <p style="margin-top:10px; color:#94a">WMS 3PL mockup · edge-case audit · 2026-06-19</p>
+  </footer>
+
+</div>
+</body>
+</html>

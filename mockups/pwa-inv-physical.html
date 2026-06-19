@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Physical Inventory — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Physical Inventory" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <style>
+      .var-pos { color:#235c25; font-weight:700; } .var-neg { color:#b03030; font-weight:700; } .var-zero { color:var(--ink-faint); }
+      .frz { display:flex; align-items:center; gap:8px; padding:9px 12px; border-radius:var(--radius); margin:8px 0; font-size:13px; }
+      .frz.on  { background:#e7eef6; border:1px solid #7e9fc4; color:#2c4a6b; }
+      .frz.off { background:var(--fill); border:1px solid var(--line); color:var(--ink-soft); }
+      .progress { height:6px; background:var(--line-soft); border-radius:3px; overflow:hidden; margin-top:6px; }
+      .progress .bar { height:100%; background:var(--brand); }
+      .pill { font-size:10px; padding:1px 7px; border-radius:9px; border:1px solid var(--line); }
+      .pill.counted { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .pill.pending { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .cnt-row { display:flex; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid var(--line-soft); }
+      .cnt-row:last-child { border-bottom:none; }
+      .cnt-row .who { flex:1; min-width:0; } .cnt-row .who b { display:block; font-size:13px; } .cnt-row .who small { color:var(--ink-soft); }
+      .cnt-row input.cq { width:74px; text-align:right; } .cnt-row .sysq { font-size:12px; color:var(--ink-faint); white-space:nowrap; }
+      .tag { font-size:10px; padding:1px 6px; border-radius:9px; border:1px solid var(--line); white-space:nowrap; }
+      .tag.found { border-color:#6fae72; background:#e6f3e7; color:#235c25; } .tag.miss { border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; } .tag.ok { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .miss-link { font-size:12px; white-space:nowrap; }
+      .sum-row { display:flex; justify-content:space-between; gap:10px; padding:4px 0; font-size:13px; }
+      .req { color:var(--bad); }
+    </style>
+    <div id="phy-flash" class="sb-msg" style="display:none"></div>
+    <div id="phy"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('phy');
+    const TODAY = '2026-06-15';
+    const site = () => PWA.ctx.siteId;
+    const uomOf = pid => prodUom(pid) || '';
+    // S.lines = working rows while counting ONE in-scope location (mirrors the cycle-count interaction).
+    const S = { view:'list', tab:'open', cur:null, loc:null, lines:[], blind:false, last:null, banner:null };
+
+    function flash(t){ const m=$('phy-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('phy-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('phy-flash'); if(m) m.style.display='none'; }
+
+    const scopeText = p => p.scope==='site' ? 'Whole site' : ((areaInfo(p.site,p.area)||{}).name || ('Area '+p.area));
+    const counted = p => p.locations.filter(l=>l.status==='counted').length;
+    const allCounted = p => p.locations.length>0 && p.locations.every(l=>l.status==='counted');
+    const lineVar = l => (l.countedQty==null?l.systemQty:l.countedQty) - (l.systemQty||0);
+    const netVar = p => p.locations.reduce((s,L)=>s+(L.lines||[]).reduce((a,x)=>a+lineVar(x),0),0);
+    const varCell = v => v>0?`<span class="var-pos">+${v}</span>`:v<0?`<span class="var-neg">${v}</span>`:`<span class="var-zero">0</span>`;
+    const countablePlatesAt = loc => lpnsAtLoc(loc).filter(l=>l.site===site() && l.status!=='in-transit');
+    const productOpts = sel => `<option value="">— product —</option>`+DB.products.map(p=>`<option value="${p.id}"${p.id===sel?' selected':''}>${esc(p.name)} (${esc(p.sku)})</option>`).join('');
+    const lotOf = lpn => { const l=lpnById(lpn); return l?(l.lot||''):''; };
+
+    /* ============================================================ LIST (Open / Frozen / Closed) */
+    function tabsHtml(){
+      const c = k => DB.physicals.filter(p=>p.site===site() && (k==='all'||p.status===k)).length;
+      const tabs=[['open',`Open (${c('open')})`],['frozen',`Counting (${c('frozen')})`],['closed','Closed']];
+      return `<div class="tabs">${tabs.map(([k,l])=>`<a href="#" data-tab="${k}" class="${S.tab===k?'active':''}">${esc(l)}</a>`).join('')}</div>`;
+    }
+    function renderList(){
+      // "My tasks" filter applies to the active (open/counting) tabs only — Closed is history, never filtered.
+      const list = DB.physicals.filter(p=>p.site===site() && p.status===S.tab && (S.tab==='closed' || !PWA.mineOnly() || isMine(p)))
+        .sort((a,b)=>String(b.created).localeCompare(String(a.created)));
+      const cards = list.length ? list.map(p=>{
+        const tot=p.locations.length, cnt=counted(p), pct=tot?Math.round(cnt/tot*100):0;
+        const badge = p.status==='open'?'<span class="badge b-toputaway">open</span>':p.status==='frozen'?'<span class="badge b-allocated">🔒 counting</span>':'<span class="badge b-available">closed</span>';
+        // Assignee row + self-claim / release (role-gated in the coding phase). Hidden on the Closed history tab.
+        const who   = p.assignee ? esc(assigneeName(p.assignee))+(isMine(p)?' · me':'') : '<span class="muted">Any</span>';
+        const claim = p.assignee ? (isMine(p) ? ` · <a href="#" class="claim-btn" data-rel="${esc(p.id)}">Release</a>` : '') : ` · <a href="#" class="claim-btn" data-claim="${esc(p.id)}">Claim</a>`;
+        return `<div class="task" data-phy="${esc(p.id)}"><span class="meta"><b>${esc(p.id)}</b>
+          <small>${esc(scopeText(p))} · ${cnt}/${tot} counted${p.status!=='open'?` · net ${netVar(p)>0?'+':''}${netVar(p)}`:''}</small>
+          ${S.tab!=='closed'?`<small style="margin-top:3px">👤 ${who}${claim}</small>`:''}</span>${badge}</div>`;
+      }).join('') : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No ${S.tab==='frozen'?'frozen / counting':S.tab} stock-takes at ${esc(PWA.siteName())}${(S.tab!=='closed'&&PWA.mineOnly())?' assigned to you — switch to <b>All</b> above':''}.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">${S.tab==='open'?'Open — freeze to begin':S.tab==='frozen'?'Frozen — counting':'Closed'} at ${esc(PWA.siteName())} (${list.length})</p>${cards}`
+        + (S.tab==='open'?`<p class="scan-hint" style="text-align:left">New stock-takes are scoped &amp; created in the ERP; the floor freezes, counts &amp; posts them here.</p>`:'');
+      root.querySelectorAll('[data-tab]').forEach(el=>el.onclick=e=>{ e.preventDefault(); S.tab=el.dataset.tab; render(); });
+      root.querySelectorAll('[data-phy]').forEach(el=>el.onclick=()=>openTake(el.dataset.phy));
+      // self-claim / release — stop the click bubbling to the card's openTake
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{ ev.preventDefault(); ev.stopPropagation();
+        const rec = DB.physicals.find(p=>p.id===(el.dataset.claim||el.dataset.rel)); if(!rec) return;
+        rec.assignee = el.dataset.claim ? DB.currentUserId : ''; PWA.save(); render(); });
+    }
+    function openTake(id){ S.cur=DB.physicals.find(p=>p.id===id)||null; if(!S.cur) return; S.view='detail'; render(); }
+
+    /* ============================================================ DETAIL (freeze · count locations · post) */
+    function renderDetail(){
+      const p=S.cur; if(!p){ S.view='list'; return render(); }
+      const editable = p.frozen && p.status!=='closed';
+      const locs = p.locations.map((L,i)=>{
+        const lc=DB.locations.find(x=>x.id===L.loc)||{};
+        const net=(L.lines||[]).reduce((s,x)=>s+lineVar(x),0);
+        const action = editable ? `<span class="badge ${L.status==='counted'?'b-available':'b-toputaway'}">${L.status==='counted'?'recount':'count ›'}</span>` : `<span class="pill ${L.status}">${L.status}</span>`;
+        return `<div class="task" ${editable?`data-loc="${esc(L.loc)}"`:''}><span class="meta"><b>${esc(lc.structured||L.loc)}</b>
+          <small>${lc.area?'Area '+esc(lc.area)+' · ':''}${(L.lines||[]).length} plate(s)${L.status==='counted'?` · net ${net>0?'+':''}${net}`:''}</small></span>${action}</div>`;
+      }).join('');
+      const freezeBanner = p.frozen
+        ? `<div class="frz on">🔒 <b>Scope frozen.</b> Putaway, moves, transfers &amp; allocation are blocked across ${esc(scopeText(p))} until posted.</div>`
+        : p.status==='closed' ? `<div class="frz off">🔓 Closed ${esc(p.closed||'')} — normal operations resumed.</div>`
+        : `<div class="frz off">🔓 Not frozen. Freeze the scope to block movement and begin counting.</div>`;
+      let actions='';
+      if (p.status==='open') actions = `<button class="btn btn-primary" id="a-freeze" style="width:100%">🔒 Freeze scope &amp; begin</button>`;
+      else if (p.status==='frozen'){ const ready=allCounted(p);
+        actions = `<button class="btn btn-primary" id="a-post" style="width:100%"${ready?'':' disabled'}>Post corrections &amp; unfreeze${ready?'':` (${counted(p)}/${p.locations.length} counted)`}</button>
+                   <button class="btn btn-outline" id="a-abandon" style="width:100%">Abandon &amp; unfreeze (no corrections)</button>`; }
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(p.id)}</b>
+          <div class="muted" style="margin-top:4px">${esc(scopeText(p))} · ${esc(PWA.siteName())} · by ${esc(p.by||'—')}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">${counted(p)}/${p.locations.length} location(s) counted${p.status!=='open'?` · net variance ${netVar(p)>0?'+':''}${netVar(p)}`:''}</div>
+          <div class="progress"><div class="bar" style="width:${p.locations.length?Math.round(counted(p)/p.locations.length*100):0}%"></div></div>
+          <div style="margin-top:10px">${photoField({ ref:p.id, level:'header', title:'Stock-take evidence (optional)', readonly:p.status==='closed' })}</div></div>
+        ${freezeBanner}
+        ${p.frozen ? PWAScan.field({ id:'sf-ploc', prompt:'Scan a location in scope to count', placeholder:'bin code · LOC-…',
+            kinds:['location'], list:p.locations.map(L=>({value:L.loc,label:locName(L.loc),sub:L.status})), onScan:onScanLoc }) : ''}
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Locations in scope (${p.locations.length})</p>
+        ${locs}
+        <div class="spacer"></div>
+        ${actions}
+        <button class="btn btn-outline" id="a-back" style="width:100%">‹ Back to stock-takes</button>`;
+      root.querySelectorAll('[data-loc]').forEach(el=>el.onclick=()=>openLoc(el.dataset.loc));
+      const fz=$('a-freeze'); if(fz) fz.onclick=freeze;
+      const po=$('a-post'); if(po) po.onclick=post;
+      const ab=$('a-abandon'); if(ab) ab.onclick=abandon;
+      $('a-back').onclick=()=>{ S.cur=null; S.view='list'; render(); };
+      if (p.frozen){ const i=root.querySelector('.sb-input'); if(i) i.focus(); }
+    }
+    function onScanLoc(code, r){
+      if (!(r && r.type==='location')) return flash('Scan a location in this stock-take’s scope.');
+      if (!S.cur.locations.some(L=>L.loc===r.id)) return flash(`${locName(r.id)} is not in this stock-take’s scope.`);
+      openLoc(r.id);
+    }
+    function freeze(){
+      const p=S.cur;
+      // Re-snapshot system qty at the FREEZE moment (movement stops now) — count is taken against this stable picture.
+      p.locations.forEach(L=>{ L.status='pending';
+        L.lines = countablePlatesAt(L.loc).map(pl=>({ lpn:pl.id, product:pl.product, systemQty:pl.qty, countedQty:null })); });
+      p.frozen=true; p.status='frozen'; PWA.save();
+      ok(`${p.id} frozen — ${scopeText(p)} blocked. Count each location.`);
+      render();
+    }
+    function abandon(){
+      if (!window.confirm('Abandon this stock-take and unfreeze without posting any corrections?')) return;
+      const p=S.cur; p.frozen=false; p.status='closed'; p.closed=TODAY; PWA.save();
+      S.cur=null; S.tab='closed'; S.view='list'; render(); ok(`${p.id} abandoned — unfrozen, no corrections posted.`);
+    }
+    function post(){
+      const p=S.cur; if(!allCounted(p)) return flash('Count every location in scope before posting.');
+      let corrected=0;
+      p.locations.forEach(L=>(L.lines||[]).forEach(ln=>{
+        if (ln.found && !ln.lpn){
+          const client=(DB.products.find(x=>x.id===ln.product)||{}).client||''; const id=nextLpnId();
+          DB.lpns.push({ id, client, site:p.site, product:ln.product, qty:ln.countedQty||0, lot:ln.lot||'', expiry:'', serials:[], status:'available', loc:L.loc }); ln.lpn=id;
+          logTxn({ type:'count', lpn:id, product:ln.product, qty:ln.countedQty||0, from:L.loc, site:p.site, user:p.by||PWA.user, ref:p.id, note:`Physical inventory — found stock, minted ${id} (${ln.countedQty}) @ ${locName(L.loc)}` }); corrected++; return;
+        }
+        const lp=lpnById(ln.lpn);
+        if (lp && ln.countedQty!=null && lp.qty!==ln.countedQty){ const b=lp.qty; lp.qty=ln.countedQty;
+          if (lp.qty<=0) lp.status='dispatched';   // counted to zero (missing) — plate emptied
+          logTxn({ type:'count', lpn:lp.id, product:lp.product, qty:ln.countedQty-b, from:L.loc, site:p.site, user:p.by||PWA.user, ref:p.id, note:`Physical inventory ${b}→${ln.countedQty} @ ${locName(L.loc)}${ln.countedQty===0?' (missing)':''}` }); corrected++; }
+      }));
+      p.frozen=false; p.status='closed'; p.closed=TODAY; PWA.save();
+      S.last={ id:p.id, corrected, locs:p.locations.length, net:netVar(p) };
+      S.cur=null; S.view='done'; render();
+    }
+
+    /* ============================================================ COUNT one location (reuses the cycle-count UX) */
+    function openLoc(locId){
+      const L=S.cur.locations.find(x=>x.loc===locId); if(!L) return;
+      S.loc=locId;
+      S.lines = (L.lines||[]).map(ln=>({ lpn:ln.lpn||'', product:ln.product, lot:ln.lot||lotOf(ln.lpn), systemQty:ln.found?0:(ln.systemQty||0),
+        countedQty:(ln.countedQty==null?(L.status==='counted'?(ln.countedQty):''):ln.countedQty), found:!!ln.found, scanned:(L.status==='counted') }));
+      S.lines.forEach(l=>{ if(l.countedQty==null) l.countedQty = S.blind?'':(l.found?'':l.systemQty); });
+      S.view='loc'; render();
+    }
+    const lineVarW = l => (l.countedQty===''||l.countedQty==null?(l.found?0:l.systemQty):l.countedQty) - (l.systemQty||0);
+    function renderLoc(){
+      const loc=DB.locations.find(x=>x.id===S.loc)||{}, blind=S.blind;
+      const rows = S.lines.map((l,i)=>{
+        const v=lineVarW(l), miss=(!l.found && l.countedQty===0);
+        if (l.found){
+          return `<div class="cnt-row"><span class="tag found">found</span>
+            <span class="who"><select data-fp="${i}" style="max-width:180px">${productOpts(l.product)}</select>
+              ${tracksLot(l.product)?`<input data-fl="${i}" value="${esc(l.lot||'')}" placeholder="lot" style="width:96px;margin-top:4px">`:''}
+              ${l.foreign?`<small>scanned ${esc(l.foreign)} — not expected here</small>`:''}</span>
+            <input class="cq" data-cq="${i}" type="number" min="1" step="1" value="${l.countedQty}" placeholder="qty">
+            <a href="#" class="miss-link" data-rm="${i}" title="remove">✕</a></div>`;
+        }
+        return `<div class="cnt-row">${l.scanned?'<span class="tag ok">✓</span>':''}
+          <span class="who"><b>${esc(prodName(l.product))}</b>
+            <small>${esc(l.lpn)}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''}${blind?'':` · system ${l.systemQty} ${esc(uomOf(l.product))}`}${(!blind&&v!==0)?' · '+(v>0?'+'+v:v):''}</small>
+            ${miss?'<span class="tag miss" style="margin-top:3px;display:inline-block">missing</span>':''}</span>
+          ${blind?'':`<span class="sysq">/ ${l.systemQty}</span>`}
+          <input class="cq" data-cq="${i}" type="number" min="0" step="1" value="${l.countedQty}" placeholder="count">
+          <a href="#" class="miss-link" data-miss="${i}">0</a></div>`;
+      }).join('') || `<p class="scan-hint" style="text-align:left">No system stock here. Scan any plate physically present as “found”, or confirm the bin is empty.</p>`;
+      const net=S.lines.reduce((s,l)=>s+lineVarW(l),0);
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b>${esc(loc.structured||S.loc)}</b>${loc.area?' <span class="muted">· Area '+esc(loc.area)+'</span>':''}
+          <div class="muted" style="margin-top:4px">${S.lines.filter(l=>!l.found).length} system plate(s) · stock-take ${esc(S.cur.id)}</div>
+          <label style="display:flex;align-items:center;gap:7px;margin-top:8px;font-size:13px"><input type="checkbox" id="p-blind" ${blind?'checked':''} style="width:auto;margin:0"> Blind count (hide system qty)</label></div>
+        ${PWAScan.field({ id:'sf-item', prompt:'Scan each plate to confirm — or an item here but not listed', placeholder:'LPN-… · product barcode',
+            kinds:['lpn','product'], list:S.lines.filter(l=>!l.found&&l.lpn).map(l=>({value:l.lpn,label:l.lpn,sub:prodName(l.product)})), onScan:onScanItem })}
+        <div class="panel" style="margin:8px 0;padding:4px 12px">${rows}</div>
+        <button class="btn btn-outline btn-sm" id="p-add-found" style="width:100%">+ Found plate (physically here, not in the system)</button>
+        ${blind?'':`<div class="muted" style="margin:6px 2px;font-size:12px">net variance here ${varCell(net)}</div>`}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="p-save" style="width:100%">Save count for this location</button>
+        <button class="btn btn-outline" id="p-cancel" style="width:100%">‹ Cancel</button>`;
+      const bl=$('p-blind'); if(bl) bl.onchange=()=>{ S.blind=bl.checked; S.lines.forEach(l=>{ if(!l.found) l.countedQty=S.blind?'':l.systemQty; }); render(); };
+      root.querySelectorAll('[data-cq]').forEach(inp=>inp.oninput=()=>{ const l=S.lines[+inp.dataset.cq]; l.countedQty=inp.value===''?'':Math.max(0,parseInt(inp.value,10)||0); if(!l.found) l.scanned=true; });
+      root.querySelectorAll('[data-miss]').forEach(a=>a.onclick=e=>{ e.preventDefault(); const l=S.lines[+a.dataset.miss]; l.countedQty=0; l.scanned=true; render(); });
+      root.querySelectorAll('[data-rm]').forEach(a=>a.onclick=e=>{ e.preventDefault(); S.lines.splice(+a.dataset.rm,1); render(); });
+      root.querySelectorAll('[data-fp]').forEach(sel=>sel.onchange=()=>{ S.lines[+sel.dataset.fp].product=sel.value; render(); });
+      root.querySelectorAll('[data-fl]').forEach(inp=>inp.oninput=()=>{ S.lines[+inp.dataset.fl].lot=inp.value; });
+      $('p-add-found').onclick=()=>{ S.lines.push({ lpn:'', product:'', lot:'', systemQty:0, countedQty:'', found:true, scanned:true }); render(); };
+      $('p-save').onclick=saveLoc;
+      $('p-cancel').onclick=()=>{ S.view='detail'; S.loc=null; S.lines=[]; render(); };
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanItem(code, r){
+      if (r && r.type==='lpn'){ const L=r.entity;
+        const sys=S.lines.find(l=>!l.found && l.lpn===L.id);
+        if (sys){ sys.scanned=true; if(!S.blind && sys.countedQty==='') sys.countedQty=sys.systemQty; render(); ok(`${L.id} confirmed.`); return; }
+        S.lines.push({ lpn:'', product:L.product, lot:L.lot||'', systemQty:0, countedQty:'', found:true, scanned:true, foreign:L.id }); render(); ok(`${L.id} added as found.`); return;
+      }
+      if (r && r.type==='product'){
+        const sys=S.lines.find(l=>!l.found && l.product===r.id && !l.scanned);
+        if (sys){ sys.scanned=true; if(!S.blind && sys.countedQty==='') sys.countedQty=sys.systemQty; render(); ok(`${prodName(r.id)} confirmed.`); return; }
+        S.lines.push({ lpn:'', product:r.id, lot:'', systemQty:0, countedQty:'', found:true, scanned:true }); render(); ok(`${prodName(r.id)} added as found.`); return;
+      }
+      flash('Scan a plate (LPN-…) or a product barcode.');
+    }
+    function saveLoc(){
+      for (const l of S.lines){ if(l.found){
+        if(!l.product) return flash('Pick a product for each found plate (or remove it).');
+        if(!(parseInt(l.countedQty,10)>0)) return flash('Enter a quantity (>0) for each found plate.'); } }
+      if (S.blind){ for(const l of S.lines){ if(!l.found && (l.countedQty===''||l.countedQty==null)) return flash('Blind count — enter a count for every plate (0 for missing).'); } }
+      const L=S.cur.locations.find(x=>x.loc===S.loc); if(!L) return;
+      L.lines = S.lines.map(l=>{ let cq=l.countedQty; if(cq===''||cq==null) cq=l.found?0:l.systemQty;
+        const row={ lpn:l.found?'':l.lpn, product:l.product, lot:l.lot||'', systemQty:l.found?0:l.systemQty, countedQty:Math.max(0,parseInt(cq,10)||0) };
+        if(l.found) row.found=true; return row; });
+      L.status='counted'; PWA.save();
+      S.banner=`${locName(S.loc)} counted — ${L.lines.length} plate(s).`;
+      S.view='detail'; S.loc=null; S.lines=[]; render();
+    }
+
+    /* ============================================================ DONE */
+    function renderDone(){
+      const L=S.last||{};
+      root.innerHTML=`
+        <div class="success"><div class="check">✓</div><p><b>${esc(L.id)}</b> posted &amp; unfrozen — ${L.corrected} plate(s) corrected across ${L.locs} location(s).</p></div>
+        <div class="panel" style="margin:10px 0"><div class="sum-row"><span>Net variance</span><span>${varCell(L.net||0)}</span></div>
+          <div class="muted" style="font-size:12px;margin-top:4px">Stock corrected to the counted figures · scope unfrozen · audit trail written.</div></div>
+        <button class="btn btn-primary" id="d-list" style="width:100%">Back to stock-takes</button>
+        <button class="btn btn-outline" id="d-home" style="width:100%">Home</button>`;
+      $('d-list').onclick=()=>{ S.last=null; S.tab='closed'; S.view='list'; render(); };
+      $('d-home').onclick=()=>{ location.href='pwa-home.html'; };
+    }
+
+    function render(){
+      flashClear();
+      ({ list:renderList, detail:renderDetail, loc:renderLoc, done:renderDone }[S.view] || renderList)();
+      if (S.view==='detail' && S.banner){ ok(S.banner); S.banner=null; }
+    }
+    const q=new URLSearchParams(location.search), deep=q.get('phy');
+    if (deep && DB.physicals.find(p=>p.id===deep)) openTake(deep); else render();
+  })();
+  </script>
+</body>
+</html>

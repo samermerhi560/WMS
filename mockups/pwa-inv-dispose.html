@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Disposal — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Disposal" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <!-- screen-local styling MUST live inside #page-content (the shell rebuilds body from it only) -->
+    <style>
+      .seg { display:flex; gap:8px; margin:4px 0 12px; }
+      .seg button { flex:1; border:1.5px solid var(--line); background:var(--white); border-radius:var(--radius); padding:10px; font:inherit; cursor:pointer; }
+      .seg button.on { border-color:var(--brand); background:var(--brand-tint); font-weight:700; }
+      .seg button small { display:block; font-weight:400; color:var(--ink-soft); font-size:11px; }
+      .kv { display:flex; justify-content:space-between; gap:10px; padding:5px 0; border-bottom:1px solid var(--line-soft); font-size:13px; }
+      .kv:last-child { border-bottom:none; }
+      .kv .k { color:var(--ink-soft); } .kv .v { font-weight:600; text-align:right; }
+      .req { color:var(--bad); }
+      .mk-note { font-size:12px; color:var(--ink-soft); margin:8px 0 2px; }
+      /* statusBadge() has no class for these maker-checker states — colour them locally (mirrors erp-inv-dispose.html). */
+      .badge.b-pending  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .badge.b-posted   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .badge.b-rejected { border-color:#9a9a9a; background:#eee; color:#555; }
+      .blocked-tag { color:#7a2c2c; font-weight:600; }
+    </style>
+    <div id="ds-flash" class="sb-msg" style="display:none"></div>
+    <div id="ds"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,Math.floor(Number(v)||0)));
+    const root = $('ds');
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const uomOf = pid => prodUom(pid) || '';
+    const METHODS = [ ['scrap','Scrap','damaged / unfit'], ['destroy','Destroy','expired / recall'], ['writeoff','Write-off','lost / shrinkage'] ];
+    const METHOD_LABEL = { scrap:'Scrap', destroy:'Destroy', writeoff:'Write-off' };
+
+    // S = live screen state. view: list | form | done. tab: scrap (raise) | submitted (read-only).
+    const S = { view:'list', tab:'scrap', lpnId:null, method:'scrap', reason:'', qty:null, note:'', last:null };
+
+    function flash(t){ const m=$('ds-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('ds-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('ds-flash'); if(m) m.style.display='none'; }
+    function dspBadge(s){ const m={pending:'b-pending',posted:'b-posted',rejected:'b-rejected'}; return `<span class="badge ${m[s]||''}">${esc(s==='posted'?'disposed':s)}</span>`; }
+
+    // Disposable = physically present (qty>0) AND blocked (quarantine/hold/damaged/expired status) OR past-expiry, this client.
+    function disposable(l){ return (l.qty||0)>0 && l.site===site() && l.client===client() && (isBlocked(l.status) || isExpired(l)); }
+    function disposableLpns(){
+      return onHandLpns(site()).filter(l => disposable(l) && l.client===client() && (!PWA.mineOnly() || isMine(l)))
+        .sort((a,b)=> String(locName(a.loc)).localeCompare(String(locName(b.loc))) || a.id.localeCompare(b.id));
+    }
+    function whyBlocked(l){ return isBlocked(l.status) ? l.status : (isExpired(l) ? 'expired lot' : ''); }
+
+    /* ---------- tabs: Scrap · Submitted ---------- */
+    function tabsHtml(){
+      return `<div class="tabs">
+        <a href="#" id="t-scrap" class="${S.tab!=='submitted'?'active':''}">Scrap</a>
+        <a href="#" id="t-sub" class="${S.tab==='submitted'?'active':''}">Submitted</a></div>`;
+    }
+    function wireTabs(){
+      const a=$('t-scrap'), b=$('t-sub');
+      if(a) a.onclick=e=>{ e.preventDefault(); S.tab='scrap'; S.view='list'; render(); };
+      if(b) b.onclick=e=>{ e.preventDefault(); S.tab='submitted'; S.view='list'; render(); };
+    }
+    function renderList(){ if (S.tab==='submitted') return renderSubmitted(); renderScrap(); }
+
+    /* ---------- SCRAP tab — scan / pick a disposable plate to flag ---------- */
+    function renderScrap(){
+      const lpns = disposableLpns();
+      const cards = lpns.length ? lpns.map(l=>{
+          const exp = isExpired(l) ? ' · <span class="blocked-tag">⚠ expired</span>' : '';
+          // Assignee row: who it's assigned to + a self-claim / release control (role-gated in the coding phase).
+          const who   = l.assignee ? `${esc(assigneeName(l.assignee))}${isMine(l)?' · me':''}` : '<span class="muted">Any</span>';
+          const claim = l.assignee
+            ? (isMine(l) ? ` · <a href="#" class="claim-btn" data-rel="${esc(l.id)}">Release</a>` : '')
+            : ` · <a href="#" class="claim-btn" data-claim="${esc(l.id)}">Claim</a>`;
+          return `<div class="task" data-lpn="${esc(l.id)}"><span class="meta"><b>${esc(l.id)}</b>
+            <small>${esc(prodName(l.product))} · ${l.qty} ${esc(uomOf(l.product))} · @ ${esc(locName(l.loc))}${exp}</small>
+            <small style="margin-top:3px">👤 ${who}${claim}</small></span>
+            <span class="badge b-damaged">flag ›</span></div>`;
+        }).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No blocked or expired stock for ${esc(PWA.clientName())} at ${esc(PWA.siteName())}${PWA.mineOnly()?' assigned to you — switch to <b>All</b> above to see every plate':''}.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + `<p class="mk-note">Flag blocked / expired stock for scrap. This raises a <b>pending</b> disposal — a supervisor approves it in the ERP (maker-checker). <b>No stock leaves until approved.</b></p>`
+        + PWAScan.field({ id:'sf-ds', prompt:'Scan a plate (LPN) to dispose', autofocus:true, placeholder:'LPN-00040',
+            kinds:['lpn'], list:lpns.map(l=>({value:l.id,label:l.id,sub:`${prodName(l.product)} · ${whyBlocked(l)} @ ${locName(l.loc)}`})), onScan:onScanPlate })
+        + (lpns.length?`<p class="scan-hint" style="text-align:left;margin-left:2px">Disposable stock at ${esc(PWA.siteName())} (${lpns.length})</p>${cards}`:cards);
+      wireTabs();
+      root.querySelectorAll('[data-lpn]').forEach(el=>el.onclick=()=>openForm(el.dataset.lpn));
+      // self-claim / release — stop the click bubbling to the card's openForm
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{
+        ev.preventDefault(); ev.stopPropagation();
+        const rec = lpnById(el.dataset.claim||el.dataset.rel); if(!rec) return;
+        rec.assignee = el.dataset.claim ? DB.currentUserId : '';
+        PWA.save(); render();
+      });
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanPlate(code, r){
+      if (r && r.type==='lpn'){ const l=r.entity;
+        if (l.site!==site() || l.client!==client()) return flash(`${l.id} belongs to another client/site.`);
+        if ((l.qty||0)<=0) return flash(`${l.id} is empty — nothing to dispose.`);
+        if (!disposable(l)) return flash('Only blocked or expired stock can be disposed.');
+        openForm(l.id);
+      } else if (r && r.type==='location'){ flash('Scan a plate (LPN-…), not a location.');
+      } else flash('Scan a plate (LPN-…) to dispose.');
+    }
+
+    /* ---------- SCRAP form (method → reason → qty → note → submit) ---------- */
+    function openForm(id){
+      const l=lpnById(id); if(!l || !disposable(l)){ flash('Only blocked or expired stock can be disposed.'); S.view='list'; return render(); }
+      S.view='form'; S.lpnId=id; S.method='scrap'; S.reason=reasonsFor('dispose','scrap')[0]||''; S.qty=l.qty||1; S.note='';
+      render();
+    }
+    function renderForm(){
+      const l=lpnById(S.lpnId); if(!l || !disposable(l)){ S.view='list'; return render(); }
+      const reasons=reasonsFor('dispose', S.method);
+      if (!reasons.includes(S.reason)) S.reason = reasons[0]||'';
+      if (S.qty==null || S.qty>l.qty || S.qty<1) S.qty=l.qty;
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(l.id)}</b> ${statusBadge(l.status)}${isExpired(l)&&l.status!=='expired'?' <span class="badge b-damaged">expired</span>':''}
+          <div class="kv"><span class="k">Product</span><span class="v">${esc(prodName(l.product))}</span></div>
+          <div class="kv"><span class="k">On plate</span><span class="v">${l.qty} ${esc(uomOf(l.product))}</span></div>
+          <div class="kv"><span class="k">Status</span><span class="v">${esc(l.status)}${isExpired(l)?' · past expiry':''}</span></div>
+          <div class="kv"><span class="k">Location</span><span class="v">${esc(locName(l.loc))}</span></div>
+          ${tracksLot(l.product)&&l.lot?`<div class="kv"><span class="k">Lot</span><span class="v">${esc(l.lot)}</span></div>`:''}
+          ${tracksExpiry(l.product)&&l.expiry?`<div class="kv"><span class="k">Expiry</span><span class="v">${esc(l.expiry)}</span></div>`:''}
+        </div>
+        <label class="field" style="margin-bottom:2px"><span>Method</span></label>
+        <div class="seg">${METHODS.map(([v,lab,sub])=>`<button data-m="${v}" class="${S.method===v?'on':''}">${esc(lab)}<small>${esc(sub)}</small></button>`).join('')}</div>
+        <label class="field"><span>Reason <span class="req">*</span></span>
+          <select id="ds-reason">${reasons.length?reasons.map(rr=>`<option${rr===S.reason?' selected':''}>${esc(rr)}</option>`).join(''):'<option value="">— no reasons configured —</option>'}</select></label>
+        <label class="field"><span>Quantity to dispose</span>
+          <input id="ds-qty" type="number" min="1" max="${l.qty}" step="1" value="${S.qty}"></label>
+        <div class="muted" style="margin:-4px 0 10px">${S.qty<l.qty?`Partial — <b>${S.qty}</b> of ${l.qty} flagged; ${l.qty-S.qty} stay on ${esc(l.id)}.`:`Whole plate (<b>${l.qty}</b> ${esc(uomOf(l.product))}).`}</div>
+        <label class="field"><span>Note (optional)</span>
+          <textarea id="ds-note" rows="2" placeholder="e.g. forklift puncture — whole pallet unusable">${esc(S.note)}</textarea></label>
+        <p class="mk-note">Submitting raises a <b>pending</b> disposal. A supervisor approves it in the ERP — no stock leaves until then.</p>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="ds-submit" style="width:100%">Submit for approval</button>
+        <button class="btn btn-outline" id="ds-back" style="width:100%">‹ Back to stock</button>`;
+      root.querySelectorAll('[data-m]').forEach(el=>el.onclick=()=>{
+        S.method=el.dataset.m; const rs=reasonsFor('dispose', S.method); S.reason=rs[0]||''; render();   // repopulate reasons on method change
+      });
+      const rs=$('ds-reason'); if(rs) rs.onchange=()=>{ S.reason=rs.value; };
+      const qi=$('ds-qty'); if(qi) qi.onchange=()=>{ S.qty=clamp(qi.value,1,l.qty); render(); };
+      const nt=$('ds-note'); if(nt) nt.oninput=()=>{ S.note=nt.value; };
+      $('ds-submit').onclick=submit;
+      $('ds-back').onclick=()=>{ S.view='list'; S.lpnId=null; render(); };
+    }
+    function submit(){
+      const l=lpnById(S.lpnId); if(!l || !disposable(l)){ S.view='list'; return render(); }
+      const reason=String(S.reason||'').trim();
+      if(!reason) return flash('Pick a reason before submitting.');
+      const qty=clamp(S.qty,1,l.qty);
+      const d=disposeCreate({ lpn:l.id, qty, method:S.method, reason, note:String(S.note||'').trim(), by:PWA.user });
+      if(!d) return flash('Could not raise the disposal — check the plate still holds stock.');
+      PWA.save();
+      S.last={ id:d.id, qty:d.qty, method:d.method, lpn:d.lpn, product:l.product, loc:l.loc, reason:d.reason };
+      S.view='done'; S.lpnId=null; render();
+    }
+
+    /* ---------- DONE — confirmation (maker-checker) ---------- */
+    function renderDone(){
+      const L=S.last||{};
+      root.innerHTML=`
+        <div class="success"><div class="check">✓</div>
+          <p><b>${esc(L.id)}</b> submitted — a supervisor approves it in the ERP. <b>No stock leaves until approved.</b></p></div>
+        <div class="panel" style="margin:10px 0">
+          <div class="kv"><span class="k">Plate</span><span class="v mono">${esc(L.lpn)}</span></div>
+          <div class="kv"><span class="k">Product</span><span class="v">${esc(prodName(L.product))}</span></div>
+          <div class="kv"><span class="k">Method</span><span class="v">${esc(METHOD_LABEL[L.method]||L.method)}</span></div>
+          <div class="kv"><span class="k">Reason</span><span class="v">${esc(L.reason)}</span></div>
+          <div class="kv"><span class="k">Quantity</span><span class="v">${L.qty} ${esc(uomOf(L.product))}</span></div>
+          <div class="kv"><span class="k">Status</span><span class="v">${dspBadge('pending')}</span></div>
+        </div>
+        <button class="btn btn-primary" id="d-more" style="width:100%">Flag another plate</button>
+        <button class="btn btn-outline" id="d-sub" style="width:100%">View submitted</button>
+        <button class="btn btn-outline" id="d-home" style="width:100%">Home</button>`;
+      $('d-more').onclick=()=>{ S.last=null; S.tab='scrap'; S.view='list'; render(); };
+      $('d-sub').onclick=()=>{ S.last=null; S.tab='submitted'; S.view='list'; render(); };
+      $('d-home').onclick=()=>{ location.href='pwa-home.html'; };
+    }
+
+    /* ---------- SUBMITTED tab — read-only list for this site (newest first) ---------- */
+    function renderSubmitted(){
+      const list = DB.disposals.filter(d=>d.site===site())
+        .sort((a,b)=> String(b.created).localeCompare(String(a.created)) || String(b.id).localeCompare(String(a.id)));
+      const cards = list.length ? list.map(d=>
+        `<div class="task"><span class="meta"><b>${esc(d.id)}</b>
+          <small>${esc(prodName(d.product))} · ${d.qty} ${esc(uomOf(d.product))} · ${esc(METHOD_LABEL[d.method]||d.method)} · ${esc(d.reason)}${d.created?' · '+esc(d.created):''}</small></span>
+          ${dspBadge(d.status)}</div>`).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No disposals submitted at ${esc(PWA.siteName())} yet.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + `<p class="mk-note">Read-only. Approval (or rejection) happens in the ERP — a supervisor reviews each request (maker-checker). Stock is only removed once a request is <b>approved/posted</b>.</p>`
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Disposals at ${esc(PWA.siteName())} (${list.length})</p>${cards}`;
+      wireTabs();
+    }
+
+    /* ---------- dispatch ---------- */
+    function render(){
+      flashClear();
+      ({ list:renderList, form:renderForm, done:renderDone }[S.view] || renderList)();
+    }
+    // deep link: ?lpn=LPN-00040 pre-opens the scrap form for that plate if it's disposable.
+    const q=new URLSearchParams(location.search);
+    const deep=q.get('lpn'); const dl=deep&&lpnById(deep);
+    if (dl && disposable(dl)) openForm(deep);
+    else render();
+  })();
+  </script>
+</body>
+</html>

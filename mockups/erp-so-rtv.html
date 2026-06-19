@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Return to Vendor — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="so-rtv" data-erp-title="Stock-Out"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Stock-Out › Return to vendor">
+  <div id="page-content">
+
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-info { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tag.tag-ok   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-block{ border-color:#c47e7e; background:#f6e7e7; color:#7a2c2c; }
+      .badge.b-open    { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .badge.b-shipped { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .mode-pick { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
+      .mode-card { flex:1; min-width:240px; border:1.5px solid var(--line); border-radius:var(--radius); padding:12px 14px; cursor:pointer; background:var(--white); }
+      .mode-card:hover { background:var(--fill); } .mode-card.on { border-color:var(--brand); background:var(--brand-tint); }
+      .mode-card b { display:block; } .mode-card small { color:var(--ink-soft); }
+      table.ln { width:100%; border-collapse:collapse; margin:6px 0 10px; }
+      table.ln th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); border-bottom:1.5px solid var(--line); padding:5px 8px; }
+      table.ln td { padding:6px 8px; border-bottom:1px solid var(--line-soft); font-size:13px; vertical-align:middle; }
+      table.ln .num { text-align:right; } table.ln input[type=number]{ max-width:80px; }
+      .pick-row { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; } .pick-row .field { margin-bottom:0; }
+      .act-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; } .act-bar .right { margin-left:auto; display:flex; gap:8px; }
+      .req-note { font-size:12px; color:var(--ink-soft); }
+
+      /* printable RTV note */
+      .rtv-note { border:1px solid var(--line); border-radius:var(--radius); background:var(--white); padding:22px 26px; max-width:760px; }
+      .rtv-note h2 { margin:0 0 2px; } .rtv-note .doc-sub { color:var(--ink-soft); font-size:13px; margin-bottom:16px; }
+      .rtv-note .doc-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 26px; margin-bottom:18px; }
+      .rtv-note .doc-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .rtv-note .doc-grid .v { font-weight:600; margin-bottom:6px; }
+      @media print { .no-print { display:none !important; } .rtv-note { border:none; max-width:none; } }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+      <div class="page-head"><h1>Return to vendor</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn btn-primary" onclick="openNew()">+ New RTV</button></div>
+      </div>
+      <p class="sub">Ship stock <b>out of the warehouse back to a supplier or to the owning client</b> — recalls, defects,
+        expired or over-delivered goods — distinct from a customer outbound (which ships to a consignee). Each line picks a
+        stock plate; <b>shipping</b> issues the quantity out of stock, logs the audit trail and produces an RTV note.</p>
+
+      <div class="tabs" id="tabs"></div>
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Site</span><select id="f-site"></select></label>
+          <label class="field"><span>Destination type</span><select id="f-dt"><option value="all">All</option><option value="supplier">Supplier</option><option value="client">Client</option></select></label>
+          <label class="field"><span>Assignee</span><select id="f-assignee"></select></label>
+          <label class="field"><span>Product / dest / ID</span><input id="f-q" placeholder="Search…"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:28px">⚙</th><th>ID</th><th>Date</th><th>Dest. type</th><th>Destination</th>
+          <th>Client (owner)</th><th class="num">Lines</th><th class="num">Qty</th><th>Status</th><th>Assignee</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== CREATE ===================== -->
+    <div id="view-form" style="display:none">
+      <div class="page-head"><h1>New RTV</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+
+      <div class="panel">
+        <fieldset><legend>Header</legend>
+          <div class="field-row">
+            <label class="field"><span>Site</span><select id="h-site"></select></label>
+            <label class="field"><span>Owning client <span class="req">*</span></span><select id="h-client"></select></label>
+          </div>
+          <div class="mode-pick" style="margin-top:6px">
+            <div class="mode-card" id="m-supplier" onclick="setDest('supplier')"><b>Return to supplier</b><small>Send goods back to the vendor that supplied them (recall / defect).</small></div>
+            <div class="mode-card" id="m-client"   onclick="setDest('client')"><b>Return to client</b><small>Send the client's own stock back to the client (expired / withdrawal).</small></div>
+          </div>
+          <div class="field-row">
+            <label class="field" style="flex:2"><span>Destination <span class="req">*</span></span><select id="h-dest"></select></label>
+            <label class="field" style="flex:2"><span>Reason <span class="req">*</span></span><select id="h-reason"></select></label>
+          </div>
+        </fieldset>
+
+        <fieldset><legend>Lines — pick stock plates</legend>
+          <div class="pick-row">
+            <label class="field" style="flex:3"><span>Plate (LPN)</span><select id="l-lpn" onchange="onPickLpn()"></select></label>
+            <label class="field"><span>Qty</span><input id="l-qty" type="number" min="1" value="1"></label>
+            <button class="btn btn-outline btn-sm" onclick="addLine()">Add line</button>
+          </div>
+          <div class="req-note" id="l-hint"></div>
+          <table class="ln" id="f-lines"></table>
+          <div class="req-note" id="f-empty"></div>
+        </fieldset>
+
+        <div class="act-bar">
+          <span class="req-note">Saving opens the RTV; <b>Ship</b> then issues the stock out and produces the RTV note.</span>
+          <span class="right"><button class="btn btn-outline" onclick="show('list')">Cancel</button>
+            <button class="btn btn-primary" id="save-btn" onclick="saveRtv()">Save RTV</button></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== PROCESS / NOTE ===================== -->
+    <div id="view-proc" style="display:none">
+      <div class="page-head"><h1 id="p-title">RTV</h1>
+        <div class="acts no-print">
+          <button class="btn btn-outline" onclick="show('list')">Back</button>
+          <button class="btn btn-outline" id="p-print" onclick="window.print()" style="display:none">Print note</button>
+        </div></div>
+      <div class="crumb no-print"><a href="#" onclick="show('list');return false">‹ Back to RTV list</a></div>
+
+      <!-- editable processing view (open) -->
+      <div class="panel" id="p-edit">
+        <fieldset><legend>RTV</legend><div class="sum-grid" id="p-summary"></div></fieldset>
+        <table class="ln" id="p-lines"></table>
+        <div class="act-bar" id="p-actions"></div>
+      </div>
+
+      <!-- printable note (shipped) -->
+      <div class="rtv-note" id="p-note" style="display:none"></div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+    const state = { site:'S-LYON', dt:'all', q:'', tab:'open', assignee:'all' };
+    let fdest='supplier', flines=[], cur=null;
+
+    const rBadge = s => `<span class="badge b-${s}">${s}</span>`;
+    const DT_LABEL = { supplier:'Supplier', client:'Client' };
+
+    /* ============================================================ LIST */
+    function renderTabs(){
+      const c = k => DB.rtvs.filter(r=>r.site===state.site && (k==='all'||r.status===k)).length;
+      const tabs=[['open','Open'],['shipped','Shipped']];
+      $('tabs').innerHTML = tabs.map(([k,l])=>`<a href="#" class="${k===state.tab?'active':''}" onclick="setTab('${k}');return false">${l} <span class="muted">(${c(k)})</span></a>`).join('');
+    }
+    function setTab(k){ state.tab=k; renderTabs(); renderList(); }
+    function renderList(){
+      const list = DB.rtvs.filter(r=>{
+        if (r.site!==state.site) return false;
+        if (r.status!==state.tab) return false;
+        if (state.dt!=='all' && r.destType!==state.dt) return false;
+        if (!assigneeFilterPass(r, state.assignee)) return false;
+        if (state.q){ const hay=`${r.id} ${rtvDestName(r)} ${(r.lines||[]).map(l=>prodName(l.product)).join(' ')}`.toLowerCase(); if(!hay.includes(state.q)) return false; }
+        return true;
+      }).sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+      $('rows').innerHTML = list.length ? list.map(r=>{
+        const qty=(r.lines||[]).reduce((s,l)=>s+(l.qty||0),0);
+        return `<tr><td class="dots">⋮</td>
+          <td class="mono"><a href="#" onclick="open_('${r.id}');return false">${r.id}</a></td>
+          <td>${esc(r.created)}</td><td><span class="tag tag-info">${esc(DT_LABEL[r.destType]||r.destType)}</span></td>
+          <td>${esc(rtvDestName(r))}</td><td>${esc(dbName('clients',r.client))}</td>
+          <td class="num">${(r.lines||[]).length}</td><td class="num">${qty}</td><td>${rBadge(r.status)}</td>
+          <td>${r.assignee ? `<span class="tag tag-rule" title="Dispatched to this person">${esc(assigneeName(r.assignee))}${isMine(r)?' · <b>me</b>':''}</span>` : '<span class="muted">Any</span>'}</td>
+          <td><a href="#" onclick="open_('${r.id}');return false">${r.status==='open'?'Process ›':'View note'}</a></td></tr>`;
+      }).join('') : `<tr><td colspan="11" class="muted" style="padding:18px">No ${state.tab} RTVs at ${dbName('sites',state.site)}.</td></tr>`;
+      $('list-summary').textContent = `${list.length} shown · ${DB.rtvs.filter(r=>r.site===state.site&&r.status==='open').length} open at ${dbName('sites',state.site)}`;
+    }
+
+    /* ============================================================ CREATE */
+    function openNew(){ fdest='supplier'; flines=[]; show('form'); $('h-site').value=state.site; fillClients(); setDest('supplier'); }
+    function setDest(d){
+      fdest=d;
+      $('m-supplier').classList.toggle('on',d==='supplier'); $('m-client').classList.toggle('on',d==='client');
+      fillDest(); fillReasons();
+    }
+    function fillClients(){ $('h-client').innerHTML=DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join(''); fillLpns(); }
+    function fillDest(){
+      if (fdest==='supplier'){
+        $('h-dest').innerHTML = DB.suppliers.filter(s=>s.status!=='inactive').map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+      } else {
+        const c=$('h-client').value;
+        $('h-dest').innerHTML = DB.clients.filter(x=>x.id===c).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
+      }
+    }
+    function fillReasons(){
+      $('h-reason').innerHTML = reasonsFor('rtv').concat('Other (see note)').map(r=>`<option>${esc(r)}</option>`).join('');
+    }
+    // Offer blocked OR available on-hand plates for the chosen owning client at this site.
+    function eligibleLpns(){
+      const site=$('h-site').value, client=$('h-client').value;
+      const used=new Set(flines.map(l=>l.lpn));
+      return onHandLpns(site).filter(l=> l.client===client && (isBlocked(l.status) || l.status==='available') && !used.has(l.id));
+    }
+    function fillLpns(){
+      const list=eligibleLpns();
+      $('l-lpn').innerHTML = list.length
+        ? list.map(l=>`<option value="${l.id}">${l.id} — ${esc(prodName(l.product))} · ${l.qty} · ${esc(l.status)} @ ${esc(locName(l.loc))}</option>`).join('')
+        : `<option value="">— no eligible stock for this client at this site —</option>`;
+      onPickLpn();
+    }
+    function onPickLpn(){
+      const l=lpnById($('l-lpn').value);
+      if(!l){ $('l-hint').textContent=''; $('l-qty').value=1; return; }
+      $('l-qty').value=l.qty; $('l-qty').max=l.qty;
+      $('l-hint').innerHTML = `On-hand <b>${l.qty}</b>${tracksLot(l.product)&&l.lot?` · lot ${esc(l.lot)}`:''}${tracksExpiry(l.product)&&l.expiry?` · exp ${esc(l.expiry)}`:''} · status ${esc(l.status)}`;
+    }
+    function addLine(){
+      const l=lpnById($('l-lpn').value); if(!l){ alert('No eligible plate to add.'); return; }
+      const qty=Math.max(1,Math.min(+$('l-qty').value||1, l.qty));
+      flines.push({ lpn:l.id, product:l.product, qty, lot:l.lot||'', expiry:l.expiry||'', serials:(l.serials||[]).slice() });
+      fillLpns(); renderFLines();
+    }
+    function rmFLine(i){ flines.splice(i,1); fillLpns(); renderFLines(); }
+    function renderFLines(){
+      if(!flines.length){ $('f-lines').innerHTML=''; $('f-empty').textContent='No lines yet — pick at least one plate.'; $('save-btn').disabled=true; return; }
+      $('f-empty').textContent=''; $('save-btn').disabled=false;
+      $('f-lines').innerHTML=`<thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th>Expiry</th><th class="num">Qty</th><th></th></tr></thead><tbody>`+
+        flines.map((l,i)=>`<tr><td class="mono">${esc(l.lpn)}</td><td>${esc(prodName(l.product))}</td>
+          <td class="mono">${tracksLot(l.product)?esc(l.lot||'—'):'<span class="muted">n/a</span>'}</td>
+          <td>${tracksExpiry(l.product)?esc(l.expiry||'—'):'<span class="muted">n/a</span>'}</td>
+          <td class="num">${l.qty}</td><td><a href="#" onclick="rmFLine(${i});return false">remove</a></td></tr>`).join('')+`</tbody>`;
+    }
+    function saveRtv(){
+      if(!flines.length){ alert('Add at least one line.'); return; }
+      const dest=$('h-dest').value; if(!dest){ alert('Choose a destination.'); return; }
+      const r={ id:nextRtvId(), client:$('h-client').value, site:$('h-site').value, destType:fdest, dest,
+        reason:$('h-reason').value, status:'open', created:nowStamp(), by:currentUser(),
+        lines:flines.map(l=>({...l})) };
+      DB.rtvs.push(r);
+      state.tab='open'; renderTabs(); banner(`<b>${r.id}</b> created — ${r.lines.length} line(s) to ${esc(DT_LABEL[fdest])} ${esc(rtvDestName(r))}, awaiting shipment.`);
+      renderList(); show('list');
+    }
+
+    /* ============================================================ PROCESS / SHIP / NOTE */
+    function open_(id){ cur=DB.rtvs.find(x=>x.id===id); if(!cur) return; cur.status==='shipped'?renderNote():renderProc(); show('proc'); }
+    function renderProc(){
+      const r=cur; $('p-edit').style.display=''; $('p-note').style.display='none'; $('p-print').style.display='none';
+      $('p-title').textContent=`RTV ${r.id}`;
+      $('p-summary').innerHTML=[['ID',r.id],['Destination type',DT_LABEL[r.destType]||r.destType],['Destination',rtvDestName(r)],
+        ['Owning client',dbName('clients',r.client)],['Site',dbName('sites',r.site)],['Reason',r.reason||'—'],
+        ['Created',r.created],['By',r.by||'—'],['Status',r.status]]
+        .map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+      $('p-lines').innerHTML=lineRows(r,false);
+      $('p-actions').innerHTML = `<span class="req-note">Shipping issues each line's quantity <b>out of stock</b> (serials carried from the plate), logs an <code>rtv</code> transaction, and sets the RTV to <b>shipped</b>.</span>
+        <span class="right">
+          <label class="field" style="margin-bottom:0;min-width:200px"><span>Assignee <span class="muted">· dispatch to</span></span><select id="p-assignee" onchange="assignRtv(this.value)">${assigneePickerOptions(r.site||'', r.assignee)}</select></label>
+          <button class="btn btn-primary" onclick="shipRtv()">Ship &amp; issue stock</button></span>`;
+    }
+    function lineRows(r, shipped){
+      return `<thead><tr><th>LPN</th><th>Product</th><th>Lot</th><th>Expiry</th><th>Serial(s)</th><th class="num">Qty</th></tr></thead><tbody>`+
+        (r.lines||[]).map(l=>`<tr><td class="mono">${esc(l.lpn)}</td><td>${esc(prodName(l.product))}</td>
+          <td class="mono">${tracksLot(l.product)?esc(l.lot||'—'):'<span class="muted">n/a</span>'}</td>
+          <td>${tracksExpiry(l.product)?esc(l.expiry||'—'):'<span class="muted">n/a</span>'}</td>
+          <td class="mono">${tracksSerial(l.product)?esc((l.serials||[]).join(', ')||'—'):'<span class="muted">n/a</span>'}</td>
+          <td class="num">${l.qty}</td></tr>`).join('')+`</tbody>`;
+    }
+    // Dispatch: persist the assignee onto the live RTV so the list + "My requests" reflect it this session.
+    function assignRtv(uid){ if(cur){ cur.assignee=uid; renderList(); } }
+    function shipRtv(){
+      const r=cur; if(!r||r.status!=='open') return;
+      rtvIssue(r, currentUser());
+      banner(`<b>${r.id}</b> shipped — stock issued out to ${esc(DT_LABEL[r.destType])} ${esc(rtvDestName(r))} and logged to audit trail.`);
+      renderNote();
+    }
+    function renderNote(){
+      const r=cur; $('p-edit').style.display='none'; $('p-note').style.display=''; $('p-print').style.display='';
+      $('p-title').textContent=`RTV ${r.id} — note`;
+      const qty=(r.lines||[]).reduce((s,l)=>s+(l.qty||0),0);
+      $('p-note').innerHTML = `
+        <h2>Return-to-${esc(r.destType==='supplier'?'Supplier':'Client')} Note</h2>
+        <div class="doc-sub">${esc(r.id)} · issued ${esc(r.shipped||r.created)}</div>
+        <div class="doc-grid">
+          <div><div class="k">Destination (${esc(DT_LABEL[r.destType])})</div><div class="v">${esc(rtvDestName(r))}</div></div>
+          <div><div class="k">Owning client</div><div class="v">${esc(dbName('clients',r.client))}</div></div>
+          <div><div class="k">From site</div><div class="v">${esc(dbName('sites',r.site))}</div></div>
+          <div><div class="k">Reason</div><div class="v">${esc(r.reason||'—')}</div></div>
+          <div><div class="k">Issued by</div><div class="v">${esc(r.by||'—')}</div></div>
+          <div><div class="k">Total qty</div><div class="v">${qty}</div></div>
+        </div>
+        <table class="ln">${lineRows(r,true)}</table>
+        <div class="req-note" style="margin-top:14px">Goods returned and removed from inventory. This note accompanies the physical shipment.</div>`;
+    }
+
+    /* ============================================================ shared */
+    function show(v){ ['list','form','proc'].forEach(x=>$('view-'+x).style.display=x===v?'':'none'); window.scrollTo(0,0); }
+    function banner(html){ $('banner').innerHTML=html+' <span class="muted">(mock — session only)</span>'; $('banner').style.display='block'; }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ============================================================ init */
+    $('f-site').innerHTML=DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('h-site').innerHTML=$('f-site').innerHTML;
+    $('f-assignee').innerHTML = assigneeFilterOptions('', state.assignee);
+    $('f-site').addEventListener('change',e=>{ state.site=e.target.value; renderTabs(); renderList(); });
+    $('f-dt').addEventListener('change',e=>{ state.dt=e.target.value; renderList(); });
+    $('f-assignee').addEventListener('change',e=>{ state.assignee=e.target.value; renderList(); });
+    $('f-q').addEventListener('input',e=>{ state.q=e.target.value.trim().toLowerCase(); renderList(); });
+    $('h-site').addEventListener('change',()=>{ fillLpns(); });
+    $('h-client').addEventListener('change',()=>{ if(fdest==='client') fillDest(); flines=[]; fillLpns(); renderFLines(); });
+    renderTabs(); renderList();
+  </script>
+</body></html>

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Return to vendor — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Return to vendor" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <!-- screen-local styling MUST live inside #page-content (the shell rebuilds body from it only) -->
+    <style>
+      .rtv-line { border:1px solid var(--line-soft); border-radius:var(--radius); padding:10px 12px; margin-bottom:10px; background:var(--white); }
+      .rtv-line .lh { font-weight:700; font-size:13px; }
+      .rtv-line .lh small { font-weight:400; color:var(--ink-soft); }
+      .ck { display:flex; gap:14px; margin:8px 0 4px; font-size:13px; flex-wrap:wrap; }
+      .ck .on { color:#235c25; font-weight:600; } .ck .off { color:var(--ink-faint); } .ck .ovr { color:#8a6d00; font-weight:600; }
+      .rtv-warn { font-size:12px; margin-top:6px; color:var(--bad); font-weight:600; }
+      .dest { font-weight:700; }
+      .dest .arr { color:var(--ink-faint); margin:0 5px; }
+      .sum-row { display:flex; justify-content:space-between; gap:10px; padding:6px 0; border-bottom:1px solid var(--line-soft); font-size:13px; }
+      .sum-row:last-child { border-bottom:none; }
+      .sum-row .q { font-weight:700; white-space:nowrap; }
+    </style>
+    <div id="rtv-flash" class="sb-msg" style="display:none"></div>
+    <div id="rtv"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('rtv');
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const uomOf = pid => prodUom(pid) || '';
+    // S.rows mirrors the open RTV's lines for the in-flight scan-confirm interaction (no DB mutation until commit).
+    const S = { view:'list', tab:'ship', cur:null, rows:null, last:null };
+
+    function flash(t){ const m=$('rtv-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('rtv-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('rtv-flash'); if(m) m.style.display='none'; }
+
+    const toShip = () => DB.rtvs.filter(r => r.status==='open' && r.site===site() && (!PWA.mineOnly() || isMine(r)));
+    const shipped = () => DB.rtvs.filter(r => r.status==='shipped' && r.site===site())
+                            .sort((a,b)=>String(b.shipped||b.created).localeCompare(String(a.shipped||a.created)));
+    const rtvById = id => DB.rtvs.find(r=>r.id===id) || null;
+
+    // A line is shippable iff its plate exists, is not already issued out, and still has qty to give.
+    function lineIssue(l){ const lp=lpnById(l.lpn);
+      if(!lp) return { lp:null, why:'plate not found' };
+      if(lp.status==='dispatched' || (lp.qty||0)<=0) return { lp, why:'already issued out' };
+      return { lp, why:'' };
+    }
+
+    /* ============================================================ LIST (tabs: To ship · Shipped) */
+    function tabsHtml(){
+      const tabs=[['ship',`To ship (${toShip().length})`],['shipped','Shipped']];
+      return `<div class="tabs">${tabs.map(([k,l])=>`<a href="#" data-tab="${k}" class="${S.tab===k?'active':''}">${esc(l)}</a>`).join('')}</div>`;
+    }
+    function renderList(){ if (S.tab==='shipped') return renderShipped(); renderToShip(); }
+
+    function renderToShip(){
+      const list = toShip();
+      const cards = list.length ? list.map(r=>{
+        const units=r.lines.reduce((s,l)=>s+(l.qty||0),0);
+        // Assignee row: who it's assigned to + a self-claim / release control (role-gated in the coding phase).
+        const who   = r.assignee ? `${esc(assigneeName(r.assignee))}${isMine(r)?' · me':''}` : '<span class="muted">Any</span>';
+        const claim = r.assignee
+          ? (isMine(r) ? ` · <a href="#" class="claim-btn" data-rel="${esc(r.id)}">Release</a>` : '')
+          : ` · <a href="#" class="claim-btn" data-claim="${esc(r.id)}">Claim</a>`;
+        return `<div class="task" data-rtv="${esc(r.id)}"><span class="meta"><b>${esc(r.id)}</b>
+          <small>${esc(r.destType==='supplier'?'to supplier':'to client')} <b>${esc(rtvDestName(r))}</b>${r.reason?' · '+esc(r.reason):''} · ${r.lines.length} plate(s) · ${units} unit(s)</small>
+          <small style="margin-top:3px">👤 ${who}${claim}</small></span>
+          <span class="badge b-toputaway">to ship</span></div>`;
+      }).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div>
+            <p class="muted">No returns to ship at ${esc(PWA.siteName())}${PWA.mineOnly()?' assigned to you — switch to <b>All</b> above to see every return':''}.</p>
+            <p class="scan-hint">Returns to a vendor or client are <b>created in the ERP</b> (Stock-Out › Return to vendor); the floor picks &amp; ships them here.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + PWAScan.field({ id:'sf-rtv', prompt:'Scan a return order to ship', autofocus:true, placeholder:'RTV-0001',
+            kinds:['rtv'], list:list.map(r=>({value:r.id,label:r.id,sub:rtvDestName(r)})), onScan:onScanRtv })
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">To ship at ${esc(PWA.siteName())} (${list.length})</p>${cards}`
+        + (list.length?`<p class="scan-hint" style="text-align:left">Returns are created in the ERP; the floor confirms the shipment here.</p>`:'');
+      root.querySelectorAll('[data-tab]').forEach(el=>el.onclick=e=>{ e.preventDefault(); S.tab=el.dataset.tab; render(); });
+      root.querySelectorAll('[data-rtv]').forEach(el=>el.onclick=()=>openRtv(el.dataset.rtv));
+      // self-claim / release — stop the click bubbling to the card's openRtv
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{
+        ev.preventDefault(); ev.stopPropagation();
+        const rec = DB.rtvs.find(x=>x.id===(el.dataset.claim||el.dataset.rel)); if(!rec) return;
+        rec.assignee = el.dataset.claim ? DB.currentUserId : '';
+        PWA.save(); render();
+      });
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanRtv(code, r){
+      if (r && r.type==='rtv'){ const rtv=r.entity;
+        if (rtv.status!=='open') return flash(`${rtv.id} is ${rtv.status} — nothing to ship.`);
+        if (rtv.site!==site()) return flash(`${rtv.id} belongs to another site.`);
+        openRtv(rtv.id);
+      } else {
+        const rtv = DB.rtvs.find(x=>x.id.toUpperCase()===String(code).trim().toUpperCase());
+        if (rtv){ if(rtv.status!=='open') return flash(`${rtv.id} is ${rtv.status} — nothing to ship.`);
+          if(rtv.site!==site()) return flash(`${rtv.id} belongs to another site.`); openRtv(rtv.id); }
+        else flash('Scan a return order (RTV-…).');
+      }
+    }
+
+    function renderShipped(){
+      const list = shipped();
+      const cards = list.length ? list.map(r=>{
+        const units=r.lines.reduce((s,l)=>s+(l.qty||0),0);
+        return `<div class="task" data-view="${esc(r.id)}"><span class="meta"><b>${esc(r.id)}</b>
+          <small>${esc(r.destType==='supplier'?'to supplier':'to client')} <b>${esc(rtvDestName(r))}</b> · ${units} unit(s)${r.shipped?' · '+esc(r.shipped):''}</small></span>
+          <span class="badge b-dispatched">shipped</span></div>`;
+      }).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No returns shipped yet at ${esc(PWA.siteName())}.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Shipped returns (${list.length})</p>${cards}`
+        + (list.length?`<p class="scan-hint" style="text-align:left">Tap a return to view what was shipped.</p>`:'');
+      root.querySelectorAll('[data-tab]').forEach(el=>el.onclick=e=>{ e.preventDefault(); S.tab=el.dataset.tab; render(); });
+      root.querySelectorAll('[data-view]').forEach(el=>el.onclick=()=>{ S.cur=rtvById(el.dataset.view); S.view='shippedview'; render(); });
+    }
+
+    /* ============================================================ DETAIL — scan-confirm each plate → ship */
+    function openRtv(id){
+      const r=rtvById(id); if(!r) return;
+      if (r.status!=='open'){ S.cur=r; S.view='shippedview'; return render(); }
+      S.cur=r; S.rows=r.lines.map(()=>({ confirmed:false, override:false })); S.view='detail'; render();
+    }
+    function renderDetail(){
+      const r=S.cur; if(!r){ S.view='list'; return render(); }
+      const body=r.lines.map((l,i)=>{
+        const row=S.rows[i]; const done=row.confirmed||row.override;
+        const gd=lineIssue(l);
+        const lp=gd.lp;
+        return `<div class="rtv-line"><div class="lh">${esc(l.lpn)} <small>· ${esc(prodName(l.product))} · return ${l.qty} ${esc(uomOf(l.product))}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''}${tracksExpiry(l.product)&&l.expiry?' · exp '+esc(l.expiry):''}</small></div>
+          <div class="muted" style="font-size:12px;margin-top:2px">${lp?'at '+esc(locName(lp.loc)):'<span style="color:var(--bad)">plate not in stock</span>'}${l.serials&&l.serials.length?' · serials '+esc(l.serials.join(', ')):''}</div>
+          ${gd.why?`<div class="rtv-warn">⚠ ${esc(l.lpn)} — ${esc(gd.why)}; cannot ship this plate.</div>`
+            : done?`<div class="ck"><span class="on">🏷 ${row.override?'manual':'scanned'} ✓</span></div>`
+            : PWAScan.field({ id:`sf-rtv-${i}`, prompt:'Scan this plate to confirm the return', placeholder:esc(l.lpn), kinds:['lpn'], list:[{value:l.lpn,label:l.lpn,sub:'LPN'}], onScan:(c,res)=>onScanLine(i,res) })
+              + `<button class="btn btn-outline btn-sm" data-ovr="${i}" style="width:100%;margin-top:4px">Can’t scan? Confirm manually</button>`}</div>`;
+      }).join('');
+      const allShippable = r.lines.every(l=>!lineIssue(l).why);
+      const allDone = r.lines.every((l,i)=>S.rows[i].confirmed||S.rows[i].override);
+      const units=r.lines.reduce((s,l)=>s+(l.qty||0),0);
+      root.innerHTML=`
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(r.id)}</b> <span class="badge b-toputaway">to ship</span>
+          <div class="muted" style="margin-top:4px"><span class="dest">${esc(PWA.siteName())}<span class="arr">→</span>${esc(rtvDestName(r))}</span> <span class="muted">(${esc(r.destType==='supplier'?'supplier':'client')})</span></div>
+          <div class="muted">${esc(dbName('clients',r.client))}${r.reason?' · '+esc(r.reason):''}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">Confirm each plate is in hand, then ship the return — stock is <b>issued out of the warehouse</b> back to ${esc(rtvDestName(r))}.</div></div>
+        ${body}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="rt-ship" style="width:100%"${(allShippable&&allDone)?'':' disabled'}>Confirm return shipment ▸ (${units} unit(s))</button>
+        <button class="btn btn-outline" id="rt-back" style="width:100%">‹ Back to returns</button>`;
+      root.querySelectorAll('[data-ovr]').forEach(el=>el.onclick=()=>{ const i=+el.dataset.ovr; if(lineIssue(r.lines[i]).why) return flash('That plate cannot be shipped — fix it in the ERP.'); S.rows[i].override=true; render(); });
+      $('rt-ship').onclick=commitShip;
+      $('rt-back').onclick=()=>{ S.cur=null; S.rows=null; S.view='list'; render(); };
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanLine(i, res){
+      const l=S.cur.lines[i];
+      if (lineIssue(l).why) return flash(`${l.lpn} — ${lineIssue(l).why}; cannot ship this plate.`);
+      if (!res || res.type!=='lpn') return flash('Scan the plate (LPN).');
+      if (res.id!==l.lpn) return flash(`Wrong plate — expected ${l.lpn}.`);
+      S.rows[i].confirmed=true; render(); ok('Plate confirmed.');
+    }
+    function commitShip(){
+      const r=S.cur;
+      // Guard: every line still issuable, and every line scan-confirmed (or manually overridden).
+      for (const l of r.lines){ const why=lineIssue(l).why; if(why) return flash(`Cannot ship — ${l.lpn}: ${why}.`); }
+      if (!r.lines.every((l,i)=>S.rows[i].confirmed||S.rows[i].override)) return flash('Confirm every plate before shipping the return.');
+      rtvIssue(r, PWA.user);                        // issues each line out of stock, sets status='shipped', logs rtv txns
+      PWA.save();
+      const units=r.lines.reduce((s,l)=>s+(l.qty||0),0);
+      S.last={ id:r.id, dest:rtvDestName(r), destType:r.destType, units, plates:r.lines.length,
+               lines:r.lines.map(l=>({ product:l.product, qty:l.qty })) };
+      S.cur=null; S.rows=null; S.view='done'; render();
+    }
+
+    /* ============================================================ DONE — shipment summary */
+    function renderDone(){
+      const L=S.last||{};
+      const lines=(L.lines||[]).map(l=>`<div class="sum-row"><span>${esc(prodName(l.product))}</span><span class="q">${l.qty} ${esc(uomOf(l.product))}</span></div>`).join('');
+      root.innerHTML=`
+        <div class="success"><div class="check">✓</div>
+          <p><b>${esc(L.id||'')} shipped</b> to ${esc(L.dest||'—')} — stock issued out of the warehouse.</p></div>
+        <div class="panel" style="margin:10px 0">
+          <b>Return <span class="mono">${esc(L.id||'')}</span></b> <span class="muted">${esc(L.destType==='supplier'?'to supplier':'to client')}</span>
+          <div class="muted" style="margin:4px 0 8px">${L.plates} plate(s) returned to ${esc(L.dest||'—')}.</div>
+          ${lines}
+          <div class="sum-row" style="border-top:2px solid var(--line);margin-top:4px;padding-top:8px"><span><b>Total issued out</b></span><span class="q">${L.units} unit(s)</span></div></div>
+        <button class="btn btn-primary" id="dn-more" style="width:100%">Ship another return</button>
+        <button class="btn btn-outline" id="dn-shipped" style="width:100%">View shipped</button>
+        <button class="btn btn-outline" id="dn-home" style="width:100%">Home</button>`;
+      $('dn-more').onclick=()=>{ S.tab='ship'; S.view='list'; S.last=null; render(); };
+      $('dn-shipped').onclick=()=>{ S.tab='shipped'; S.view='list'; S.last=null; render(); };
+      $('dn-home').onclick=()=>{ location.href='pwa-home.html'; };
+    }
+
+    /* ============================================================ read-only view (shipped) */
+    function renderShippedView(){
+      const r=S.cur; if(!r){ S.view='list'; S.tab='shipped'; return render(); }
+      const lines=r.lines.map(l=>`<div class="sum-row"><span>${esc(l.lpn)} <span class="muted">${esc(prodName(l.product))}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''}</span></span><span class="q">${l.qty} ${esc(uomOf(l.product))}</span></div>`).join('');
+      const units=r.lines.reduce((s,l)=>s+(l.qty||0),0);
+      root.innerHTML=`
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(r.id)}</b> ${r.status==='shipped'?'<span class="badge b-dispatched">shipped</span>':statusBadge(r.status)}
+          <div class="muted" style="margin-top:4px"><span class="dest">${esc(dbName('sites',r.site))}<span class="arr">→</span>${esc(rtvDestName(r))}</span> <span class="muted">(${esc(r.destType==='supplier'?'supplier':'client')})</span></div>
+          <div class="muted">${esc(dbName('clients',r.client))}${r.reason?' · '+esc(r.reason):''}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">${r.shipped?'Shipped '+esc(r.shipped):''}${r.by?' · by '+esc(r.by):''}</div></div>
+        <div class="panel" style="margin-bottom:10px">${lines || '<span class="muted">—</span>'}
+          <div class="sum-row" style="border-top:2px solid var(--line);margin-top:4px;padding-top:8px"><span><b>Total issued out</b></span><span class="q">${units} unit(s)</span></div></div>
+        <button class="btn btn-outline" id="sv-back" style="width:100%">‹ Back to shipped</button>`;
+      $('sv-back').onclick=()=>{ S.cur=null; S.tab='shipped'; S.view='list'; render(); };
+    }
+
+    /* ============================================================ dispatch */
+    function render(){
+      flashClear();
+      ({ list:renderList, detail:renderDetail, done:renderDone, shippedview:renderShippedView }[S.view] || renderList)();
+    }
+    // deep link: ?rtv=RTV-0001 opens that return's detail
+    const q=new URLSearchParams(location.search), deep=q.get('rtv');
+    if (deep && rtvById(deep)) openRtv(deep); else render();
+  })();
+  </script>
+</body>
+</html>

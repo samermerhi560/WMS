@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Move — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Move" data-pwa-back="pwa-home.html">
+  <div id="page-content">
+    <!-- screen-local styling MUST live inside #page-content (the shell rebuilds body from it only) -->
+    <style>
+      .mv-route { font-weight:600; white-space:nowrap; } .mv-route .arr { color:var(--ink-faint); margin:0 6px; }
+      .blocked { background:#f6e7e7; border-color:#c47e7e !important; color:#7a2c2c; }
+    </style>
+    <div id="mv-flash" class="sb-msg" style="display:none"></div>
+    <div id="mv"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/photos.js"></script>
+  <script src="assets/notes.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('mv');
+    const TODAY = '2026-06-15';                       // mocked "today" (matches the other PWA screens)
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const uomOf = pid => prodUom(pid) || '';
+    const clientOf = pid => (DB.products.find(x=>x.id===pid)||{}).client || '';
+    // S = the live screen state. view: list | form. tab: move (movable stock) | recent (history).
+    const S = { view:'list', tab:'move', lpnId:null, bin:null, moveQty:null, banner:null };
+
+    function flash(t){ const m=$('mv-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('mv-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('mv-flash'); if(m) m.style.display='none'; }
+
+    // next move id — mirrors the ERP transfer screen's nextId('MOV',…,6000); DB.moves persists in the PWA session.
+    function nextMoveId(){ let n=6000; DB.moves.forEach(m=>{ const x=/MOV-(\d+)/.exec(m.id); if(x) n=Math.max(n,+x[1]); }); return 'MOV-'+(n+1); }
+
+    /* ---------- destination slotting: rank valid bins (home → consolidate → category → open), excl. the source bin ----------
+       Same shared slotting + guards as Putaway: a bin is a candidate only if it is NOT frozen, NOT segregated to
+       another client, and has capacity for the qty being moved. Reused so Move can never diverge from Putaway. */
+    function rankBins(product, cl, qty, st, excludeLoc){
+      const p = DB.products.find(x=>x.id===product)||{};
+      const pref = (p.preferred||[]).filter(x=>x.site===st);
+      const valid=[], excluded=[];
+      DB.locations.filter(b=>b.type==='storage' && b.site===st && b.status!=='inactive' && b.id!==excludeLoc).forEach(b=>{
+        if (isLocFrozen(b.id)){ excluded.push({loc:b, reason:'frozen — '+((frozenTakeFor(b.id)||{}).id||'')}); return; }
+        if (!binSegregationOk(b.id, cl)){ excluded.push({loc:b, reason:'segregated to another client'}); return; }
+        const cap = binCapacityForAdd(b.id, qty, product);
+        if (!cap.ok){ excluded.push({loc:b, reason:'full — '+cap.fails.map(f=>f.dim).join('/')}); return; }
+        const area = areaInfo(st, b.area);
+        const catOk = area && (((area.preferredCategories||[]).indexOf(p.category)>=0) || ((area.preferredSubCategories||[]).indexOf(p.subCategory)>=0));
+        const hasSame = DB.lpns.some(l=>l.loc===b.id && l.product===product && l.status==='available' && (l.qty||0)>0);
+        const isHome = pref.some(x=>(x.mode==='location'&&x.ref===b.id)||(x.mode==='area'&&x.ref===b.area));
+        let tier=3, label='open bin';
+        if (isHome){ tier=0; label='home (preferred)'; }
+        else if (hasSame){ tier=1; label='consolidate (same product here)'; }
+        else if (catOk){ tier=2; label='category match'; }
+        const a=cap.after;
+        const hr = `${a.units}${b.maxUnits!=null?'/'+b.maxUnits:''}u`
+          + (b.maxWeightKg!=null?` · ${a.weight}/${b.maxWeightKg}kg`:'')
+          + (b.maxLpns!=null?` · ${a.lpns}/${b.maxLpns} slots`:'');
+        valid.push({ loc:b, tier, label, hr });
+      });
+      valid.sort((x,y)=> x.tier-y.tier || x.loc.id.localeCompare(y.loc.id));
+      return { valid, excluded };
+    }
+    // Commit-time guard on the DESTINATION (re-checked against live stock on confirm, per the locked invariant).
+    function validateBin(binId, product, qty, cl){
+      const b=DB.locations.find(x=>x.id===binId);
+      if(!b || b.type!=='storage' || b.status==='inactive') return {ok:false, msg:'Not an active storage bin.'};
+      if(b.site!==site()) return {ok:false, msg:'That bin is at another site.'};
+      if(isLocFrozen(binId)) return {ok:false, msg:`${locName(binId)} is in a frozen stock-take (${(frozenTakeFor(binId)||{}).id||''}).`};
+      if(!binSegregationOk(binId, cl)) return {ok:false, msg:`${locName(binId)} is segregated to another client.`};
+      const cap=binCapacityForAdd(binId, qty, product); if(!cap.ok) return {ok:false, msg:`${locName(binId)} over capacity (${cap.fails.map(f=>f.dim).join(', ')}).`};
+      return {ok:true};
+    }
+
+    /* ---------- shared "pick a destination" block (suggestions + scan + excluded) ---------- */
+    function placeBlock(ranked){
+      const recId = ranked.valid[0] ? ranked.valid[0].loc.id : null;
+      const cards = ranked.valid.length
+        ? ranked.valid.slice(0,5).map(v=>{
+            const sel = v.loc.id===S.bin;
+            return `<div class="task" data-bin="${v.loc.id}" style="${sel?'border-color:#2f6fed;background:#eef4ff':''}">
+              <span class="meta"><b>${esc(v.loc.structured||v.loc.id)}</b>
+                <small>${esc(v.label)}${v.loc.id===recId?' · ★ recommended':''} · ${esc(v.hr)}</small></span>
+              ${sel?'<span class="badge b-available">✓ selected</span>':'<span class="badge b-toputaway">pick</span>'}</div>`;
+          }).join('')
+        : `<p class="scan-hint" style="text-align:left;color:var(--bad)">No valid bin — every candidate is full, frozen or segregated.</p>`;
+      const exc = ranked.excluded.slice(0,4).map(e=>
+        `<div class="task" style="opacity:.55"><span class="meta"><b>${esc(e.loc.structured||e.loc.id)}</b><small>excluded · ${esc(e.reason)}</small></span></div>`).join('');
+      return PWAScan.field({ id:'sf-bin', prompt:'Scan the destination bin', placeholder:'1-A-01-R1-B01', kinds:['location'],
+               list:ranked.valid.map(v=>({value:v.loc.id,label:v.loc.structured||v.loc.id,sub:v.label})), onScan:onScanBin })
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Bins that fit</p>${cards}`
+        + (exc?`<p class="scan-hint" style="text-align:left;margin-left:2px">Not available</p>${exc}`:'');
+    }
+    function wirePlace(){ root.querySelectorAll('[data-bin]').forEach(el=>el.onclick=()=>{ S.bin=el.dataset.bin; render(); }); }
+    function onScanBin(code, r){ if (r && r.type==='location'){ S.bin=r.id; render(); } else flash('Scan a storage location / bin.'); }
+
+    /* ---------- tabs: Move · Recent ---------- */
+    function tabsHtml(){
+      return `<div class="tabs">
+        <a href="#" id="t-move" class="${S.tab!=='recent'?'active':''}">Move</a>
+        <a href="#" id="t-recent" class="${S.tab==='recent'?'active':''}">Recent</a></div>`;
+    }
+    function wireTabs(){
+      const m=$('t-move'), r=$('t-recent');
+      if(m) m.onclick=e=>{ e.preventDefault(); S.tab='move'; render(); };
+      if(r) r.onclick=e=>{ e.preventDefault(); S.tab='recent'; render(); };
+    }
+    function renderList(){ if (S.tab==='recent') return renderRecent(); renderStock(); }
+
+    /* ---------- MOVE tab — scan / pick a plate to relocate ---------- */
+    function movableLpns(){
+      return DB.lpns.filter(l=>l.status==='available' && l.site===site() && l.client===client() && (l.qty||0)>0)
+        .sort((a,b)=> String(locName(a.loc)).localeCompare(String(locName(b.loc))) || a.id.localeCompare(b.id));
+    }
+    function renderStock(){
+      const lpns = movableLpns();
+      const cards = lpns.length ? lpns.map(l=>{
+          const exp = isExpired(l) ? ' · <span style="color:var(--bad)">⚠ expired</span>' : '';
+          return `<div class="task" data-lpn="${l.id}"><span class="meta"><b>${esc(l.id)}</b>
+            <small>${esc(prodName(l.product))} · ${l.qty} ${esc(uomOf(l.product))} · @ ${esc(locName(l.loc))}${exp}</small></span>
+            <span class="badge b-available">move ›</span></div>`;
+        }).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No movable stock for ${esc(PWA.clientName())} at ${esc(PWA.siteName())}.</p></div>`;
+      root.innerHTML = tabsHtml() +
+        PWAScan.field({ id:'sf-mv', prompt:'Scan a plate (LPN) to move', autofocus:true, placeholder:'LPN-00008',
+          kinds:['lpn'], list:lpns.map(l=>({value:l.id,label:l.id,sub:`${prodName(l.product)} @ ${locName(l.loc)}`})), onScan:onScanPlate })
+        + (lpns.length?`<p class="scan-hint" style="text-align:left;margin-left:2px">Available stock at ${esc(PWA.siteName())} (${lpns.length})</p>${cards}`:cards);
+      wireTabs();
+      root.querySelectorAll('[data-lpn]').forEach(el=>el.onclick=()=>openForm(el.dataset.lpn));
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    function onScanPlate(code, r){
+      if (r && r.type==='lpn'){ const l=r.entity;
+        if (l.status!=='available') return flash(`${l.id} is ${l.status} — only available stock can be moved here.`);
+        if (l.site!==site() || l.client!==client()) return flash(`${l.id} belongs to another client/site.`);
+        if ((l.qty||0)<=0) return flash(`${l.id} is empty.`);
+        openForm(l.id);
+      } else if (r && r.type==='location'){ flash('Scan a plate (LPN-…), not a location — the location is the destination.');
+      } else flash('Scan a plate (LPN-…) to move.');
+    }
+
+    /* ---------- RECENT tab — move history (newest first) ---------- */
+    function renderRecent(){
+      const list = DB.moves.filter(m=>m.site===site() && clientOf(m.product)===client())
+        .sort((a,b)=> String(b.date).localeCompare(String(a.date)) || String(b.id).localeCompare(String(a.id))).slice(0,25);
+      const cards = list.length ? list.map(m=>
+        `<div class="task"><span class="meta"><b>${esc(m.lpn)}</b>
+          <small>${esc(prodName(m.product))} · ${m.qty} ${esc(uomOf(m.product))} · <span class="mv-route">${esc(locName(m.from))}<span class="arr">→</span>${esc(locName(m.to))}</span>${m.date?' · '+esc(m.date):''}</small></span>
+          <span class="badge b-available">done</span></div>`).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No moves yet at ${esc(PWA.siteName())}.</p></div>`;
+      root.innerHTML = tabsHtml() + `<p class="scan-hint" style="text-align:left;margin-left:2px">Recent moves (${list.length})</p>${cards}`;
+      wireTabs();
+    }
+
+    /* ---------- MOVE form (scan/pick a plate → scan dest → qty → confirm; partial splits a child plate) ---------- */
+    function openForm(id){ S.view='form'; S.lpnId=id; S.bin=null; S.moveQty=(lpnById(id)||{}).qty||1; render(); }
+    function renderForm(){
+      const l=lpnById(S.lpnId); if(!l || l.status!=='available' || (l.qty||0)<=0){ S.view='list'; return render(); }
+      const p=DB.products.find(x=>x.id===l.product)||{};
+      const srcFrozen = frozenTakeFor(l.loc);            // a plate in a frozen stock-take cannot be moved
+      if (S.moveQty==null || S.moveQty>l.qty || S.moveQty<1) S.moveQty=l.qty;
+      const q=S.moveQty, split=q<l.qty;
+      const ranked = srcFrozen ? {valid:[],excluded:[]} : rankBins(l.product,l.client,q,site(),l.loc);
+      if (!srcFrozen && S.bin==null) S.bin = ranked.valid[0] ? ranked.valid[0].loc.id : null;
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(l.id)}</b> ${statusBadge(l.status)}${isExpired(l)?' <span class="badge b-cancelled">expired</span>':''}
+          <div class="muted" style="margin-top:4px">${esc(prodName(l.product))} · ${l.qty} ${esc(p.uom||'')}${tracksLot(l.product)&&l.lot?' · lot '+esc(l.lot):''}${tracksExpiry(l.product)&&l.expiry?' · exp '+esc(l.expiry):''}</div>
+          <div class="muted">from ${esc(locName(l.loc))}</div></div>
+        ${srcFrozen?`<div class="panel blocked" style="margin-bottom:10px"><b>Blocked — frozen stock-take ${esc(srcFrozen.id)}</b>
+          <div style="margin-top:4px;font-size:13px">${esc(locName(l.loc))} is inside an active physical-inventory freeze. Moves touching a frozen scope are refused until it is posted or abandoned.</div></div>
+          <button class="btn btn-outline" id="mv-back" style="width:100%">‹ Back to stock</button>`
+        : `<label class="field"><span>Quantity to move</span>
+          <input id="mv-qty" type="number" min="1" max="${l.qty}" step="1" value="${q}"></label>
+        <div class="muted" style="margin:-4px 0 10px">${split?`Split — <b>${q}</b> moves; <b>${l.qty-q}</b> stay${l.qty-q===1?'s':''} on ${esc(l.id)} (a new plate is minted at the destination).`:`Whole plate (<b>${l.qty}</b> ${esc(p.uom||'')}).`}</div>
+        ${placeBlock(ranked)}
+        <div style="margin:8px 0">${photoField({ ref:l.id, level:'header', title:'Condition evidence (optional)' })}</div>
+        <div style="margin:8px 0">${noteField({ ref:l.id, level:'header', title:'Move note (optional)' })}</div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="mv-confirm" style="width:100%"${S.bin?'':' disabled'}>Move ${q}${S.bin?' → '+esc(locName(S.bin)):''}</button>
+        <button class="btn btn-outline" id="mv-back" style="width:100%">‹ Back to stock</button>`}`;
+      const bk=$('mv-back'); if(bk) bk.onclick=()=>{ S.view='list'; S.lpnId=null; S.bin=null; S.moveQty=null; render(); };
+      if (srcFrozen) return;
+      wirePlace();
+      const qi=$('mv-qty'); if(qi) qi.onchange=()=>{ let v=Math.floor(Number(qi.value)||0); if(v<1)v=1; if(v>l.qty)v=l.qty; S.moveQty=v; S.bin=null; render(); };
+      const cf=$('mv-confirm'); if(cf) cf.onclick=confirmMove;
+    }
+    function confirmMove(){
+      const l=lpnById(S.lpnId); if(!l || l.status!=='available'){ S.view='list'; return render(); }
+      if(!S.bin) return flash('Select or scan a destination bin.');
+      const from=l.loc, dest=S.bin, q=Math.min(Math.max(1,Math.floor(S.moveQty)||0), l.qty);
+      if(dest===from) return flash('Pick a different bin — the plate is already there.');
+      // FREEZE guard — refuse if the plate's current bin OR the destination is inside an active frozen stock-take.
+      const fz = frozenTakeFor(from) || frozenTakeFor(dest);
+      if(fz) return flash(`Blocked — a frozen stock-take (${fz.id}) covers this location. Moves touching a frozen scope are refused.`);
+      // CAPACITY + SEGREGATION guard on the destination (shared rules — same as Putaway / Returns restock).
+      const v=validateBin(dest, l.product, q, l.client); if(!v.ok) return flash(v.msg);
+      const whole=(q===l.qty);
+      let movedId=l.id, note=(noteFor(l.id)||'').trim();
+      if(whole){
+        l.loc=dest;                                      // whole plate relocates (keeps its id + status)
+      } else {                                           // partial → split: source keeps remainder, child plate goes to dest
+        const child={ id:nextLpnId(), client:l.client, site:l.site, product:l.product, qty:q,
+          lot:l.lot||'', expiry:l.expiry||'', serials:(l.serials||[]).slice(0,q), status:l.status, loc:dest };
+        l.qty-=q; l.serials=(l.serials||[]).slice(q); DB.lpns.push(child); movedId=child.id;
+        note=(note?note+' · ':'')+`split ${q} from ${l.id} (${l.qty} left)`;
+      }
+      const mv={ id:nextMoveId(), site:l.site, lpn:movedId, product:l.product, qty:q,
+        from, to:dest, status:'done', date:TODAY, by:PWA.user, note };
+      DB.moves.push(mv);
+      logTxn({ type:'move', lpn:movedId, product:l.product, qty:q, from, to:dest, site:l.site, user:PWA.user, ref:mv.id, note:`Move ${locName(from)}→${locName(dest)}${whole?'':' (split)'}` });
+      PWA.save();
+      S.banner = `${q} ${uomOf(l.product)} of ${prodName(l.product)} moved to ${locName(dest)}${whole?'':` — new plate ${movedId}`}.`;
+      S.view='list'; S.tab='move'; S.lpnId=null; S.bin=null; S.moveQty=null; render();
+    }
+
+    /* ---------- dispatch ---------- */
+    function render(){
+      flashClear();
+      ({ list:renderList, form:renderForm }[S.view] || renderList)();
+      if (S.view==='list' && S.banner){ ok(S.banner); S.banner=null; }
+    }
+    // deep link: ?lpn=LPN-00008 opens straight into the move form for that plate (mirrors the ERP ?lpn= hand-off)
+    const q=new URLSearchParams(location.search);
+    const deep=q.get('lpn'); const dl=deep&&lpnById(deep);
+    if (dl && dl.status==='available' && dl.site===site() && dl.client===client() && (dl.qty||0)>0) openForm(deep);
+    else render();
+  })();
+  </script>
+</body>
+</html>

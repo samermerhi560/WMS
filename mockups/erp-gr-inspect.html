@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inspection — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="gr-inspect" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Goods Reception › Inspection">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .seg { display:inline-flex; border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }
+      .seg button { border:none; background:var(--white); padding:9px 20px; cursor:pointer; font:inherit;
+        text-transform:uppercase; font-size:12px; letter-spacing:.03em; font-weight:600; color:var(--ink-soft); }
+      .seg button + button { border-left:1px solid var(--line); }
+      .seg button.on-pass { background:var(--ok); color:#fff; }
+      .seg button.on-fail { background:var(--bad); color:#fff; }
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="insp-banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Inspection</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts">
+          <button class="btn" disabled>Export</button>
+        </div></div>
+      <p class="sub">Formal quality decision on license plates <b>flagged for inspection</b> at receipt (good stock goes straight to wait/put and isn't listed here). Set how many units are <b>accepted</b> — accepted goods release to wait/put (ready for <b>putaway</b>); any <b>rejected</b> shortfall routes to a blocked disposition (quarantine / hold / damaged) and <b>never enters available stock</b>. A <b>partial</b> accept splits the plate (e.g. 100 → accept 90, reject 10). Attach damage photos on a reject.</p>
+
+      <div class="tabs" id="tabs">
+        <a href="#" data-tab="pending" class="active" onclick="return false">Pending</a>
+        <a href="#" data-tab="passed" onclick="return false">Passed</a>
+        <a href="#" data-tab="failed" onclick="return false">Failed</a>
+        <a href="#" data-tab="all" onclick="return false">All</a>
+      </div>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>LPN</span><input></label>
+          <label class="field"><span>Client</span><select><option>All clients</option><option>ACME Foods Ltd</option><option>Globex Pharma</option></select></label>
+          <label class="field"><span>Site</span><select><option>All sites</option><option>Lyon DC</option><option>Paris Hub</option></select></label>
+          <label class="field"><span>Product</span><input></label>
+          <label class="field"><span>Assignee</span><select id="f-assignee"></select></label>
+          <label class="field"><span>Received from</span><input type="date"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Client <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>LPN</th><th><span class="funnel">▾</span>Client</th>
+          <th><span class="funnel">▾</span>Product</th><th><span class="funnel">▾</span>Lot</th>
+          <th><span class="funnel">▾</span>Expiry</th><th><span class="funnel">▾</span>Qty</th>
+          <th><span class="funnel">▾</span>Inspection</th>
+          <th><span class="funnel">▾</span>Assignee</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== DETAIL ===================== -->
+    <div id="view-detail" style="display:none">
+      <div class="page-head"><h1 id="d-title">Inspect</h1>
+        <div class="acts">
+          <label class="field" style="margin-bottom:0;max-width:230px"><span>Assignee <span class="muted">· dispatch to (optional)</span></span><select id="e-assignee"></select></label>
+          <button class="btn btn-primary" id="save-btn" onclick="saveInspection()">Save inspection</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+        </div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to worklist</a></div>
+
+      <div class="panel">
+        <fieldset><legend>License plate</legend>
+          <div class="sum-grid" id="d-summary"></div>
+        </fieldset>
+      </div>
+
+      <!-- already-decided plate: read-only outcome -->
+      <div id="decided-note" class="panel" style="display:none;background:var(--fill);border-color:var(--line)"></div>
+
+      <div class="panel" id="decision-panel">
+        <h3 style="margin-top:0">Quality decision</h3>
+        <div class="scan-line" style="align-items:flex-end;gap:14px;flex-wrap:wrap">
+          <label class="field" style="max-width:200px;margin-bottom:0"><span>Accepted quantity</span>
+            <input id="d-acc" type="number" min="0" step="1" oninput="onAccInput()"></label>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn btn-sm btn-outline" onclick="setAcc('all')">✓ Accept all</button>
+            <button type="button" class="btn btn-sm btn-outline" onclick="setAcc('none')">✕ Reject all</button>
+          </div>
+          <span class="muted" id="acc-note" style="align-self:center"></span>
+        </div>
+        <p class="muted" style="margin:8px 0 0;font-size:12px">Accepted units release to wait/put (WP-01) for <b>putaway</b>; any rejected shortfall splits onto a new child LPN at the chosen disposition and is <b>excluded from availability</b> — it never enters sellable stock.</p>
+
+        <div id="reject-block" style="display:none;margin-top:16px">
+          <div class="field-row">
+            <label class="field"><span>Rejected disposition <span class="req">*</span></span>
+              <select id="d-disp" onchange="fillReasons(true)">
+                <option value="quarantine">Quarantine (QA zone)</option>
+                <option value="hold">Hold</option>
+                <option value="damaged">Damaged</option>
+              </select></label>
+            <label class="field"><span>Reject reason <span class="req">*</span></span>
+              <select id="d-reason"><option value="">— select —</option></select></label>
+          </div>
+          <p class="muted" style="margin:6px 0 0;font-size:11.5px">Reasons follow the disposition and come from <b>Master Data › Reason Codes</b> (the <i>Stock status change</i> domain).</p>
+          <div style="margin-top:6px">
+            <span class="muted" style="font-size:12px">Damage / condition photos (optional) — evidence for the rejected units.</span>
+            <div id="d-photos" style="margin-top:6px"></div>
+            <div id="d-notef" style="margin-top:6px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    /* ---- state (DB-driven; inspection mutates DB.lpns via the shared inspectionSplit, like the PWA) ---- */
+    let tab = 'pending';
+    const state = { assignee:'all' };   // Assignee filter ('all' | 'mine' | a User.id)
+    let cur = null;             // current lpn under inspection
+    let acc = 0;                // accepted quantity (default = full); rejected = cur.qty - acc
+
+    /* ---- helpers ---- */
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    // Reject-reason dropdown is driven by the chosen disposition, pulled live from Master Data › Reason Codes
+    // (the 'status' domain — reasons are linked to the target status). preserve = keep the current pick if still valid.
+    function fillReasons(preserve){
+      const sel = document.getElementById('d-reason'); if (!sel) return;
+      const prev = preserve ? sel.value : '';
+      const list = reasonsFor('status', document.getElementById('d-disp').value);
+      sel.innerHTML = '<option value="">— select —</option>' +
+        list.map(r => `<option${r===prev?' selected':''}>${esc(r)}</option>`).join('');
+    }
+    // LPNs ever touched by an inspection decision → so passed/failed/all show only inspection-relevant plates.
+    function inspectedIds(){ return new Set((DB.txns||[]).filter(t=>t.type==='inspect').map(t=>t.lpn)); }
+    function inspStatus(l){
+      if (l.status === 'to-inspect') return 'pending';
+      if (['quarantine','damaged','hold'].includes(l.status)) return 'failed';
+      return 'passed';   // to-putaway / available
+    }
+    function inspBadge(s){
+      const map = { pending:'b-toputaway', passed:'b-available', failed:'b-quarantine' };
+      return `<span class="badge ${map[s]||''}">${s}</span>`;
+    }
+
+    /* ---- list ---- */
+    function inspList(){
+      const seen = inspectedIds();
+      return DB.lpns.filter(l => l.status==='to-inspect' || seen.has(l.id));
+    }
+    function renderList(){
+      const base = inspList();
+      const list = base
+        .filter(l => assigneeFilterPass(l, state.assignee))   // Assignee filter (the LPN carries .assignee)
+        .filter(l => tab === 'all' ? true : inspStatus(l) === tab);
+      document.getElementById('rows').innerHTML = list.length ? list.map(l => {
+        const p = DB.products.find(x => x.id === l.product) || {};
+        const st = inspStatus(l);
+        const canInspect = st === 'pending';
+        return `<tr>
+          <td><input type="checkbox" style="width:auto"></td><td class="dots">⋮</td>
+          <td class="mono">${l.id}</td>
+          <td>${dbName('clients', l.client)}</td>
+          <td>${prodName(l.product)}${testCaseNote(l.product)?`<div style="font-size:11px;color:#1d4ed8;font-weight:600;margin-top:2px">${testCaseNote(l.product)}</div>`:''}</td>
+          <td class="mono">${tracksLot(l.product) ? (l.lot || '—') : '<span class="muted">n/a</span>'}</td>
+          <td>${tracksExpiry(l.product) ? (l.expiry || '—') : '<span class="muted">n/a</span>'}</td>
+          <td>${l.qty} ${p.uom || ''}</td>
+          <td>${inspBadge(st)}</td>
+          <td>${l.assignee ? `<span class="tag tag-rule" title="Dispatched to this person">${esc(assigneeName(l.assignee))}${isMine(l)?' · <b>me</b>':''}</span>` : '<span class="muted">Any</span>'}</td>
+          <td><a href="#" onclick="openInspect('${l.id}');return false">${canInspect ? 'Inspect ›' : 'View ›'}</a></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="11" class="muted" style="padding:18px">No license plates in this view.</td></tr>`;
+
+      // tab counts (over inspection-relevant plates only)
+      const counts = { pending:0, passed:0, failed:0 };
+      base.forEach(l => { const s = inspStatus(l); if (counts[s] != null) counts[s]++; });
+      document.getElementById('list-summary').textContent =
+        `${counts.pending} pending · ${counts.passed} passed · ${counts.failed} failed`;
+    }
+
+    document.getElementById('tabs').addEventListener('click', e => {
+      const a = e.target.closest('[data-tab]'); if (!a) return;
+      tab = a.dataset.tab;
+      document.querySelectorAll('#tabs a').forEach(x => x.classList.toggle('active', x === a));
+      renderList();
+    });
+
+    /* ---- detail ---- */
+    function openInspect(id){
+      const l = DB.lpns.find(x => x.id === id); if (!l) return;
+      cur = l;
+      const p = DB.products.find(x => x.id === l.product) || {};
+      const serial = !!(p.track && p.track.serial);
+      const decided = l.status !== 'to-inspect';
+      document.getElementById('d-title').textContent = `${decided ? 'View' : 'Inspect'} ${l.id}`;
+      const serText = Array.isArray(l.serials) ? l.serials.join(', ') : (l.serials || '');
+      document.getElementById('d-summary').innerHTML = [
+        ['LPN', l.id],
+        ['Client', dbName('clients', l.client)],
+        ['Site', dbName('sites', l.site)],
+        ['Product', prodName(l.product)],
+        ['Tracking', testCaseNote(l.product) || trackingSummary(l.product)],
+        ['Lot / Batch', l.lot || '—', tracksLot(l.product)],
+        ['Expiry', l.expiry || '—', tracksExpiry(l.product)],
+        ['Quantity', `${l.qty} ${p.uom || ''}`],
+        ['Status', statusBadge(l.status)],
+        ['Serials', `${serText || l.qty + ' expected'}`, serial],
+      ].filter(r => r[2] !== false).map(([k,v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+      // Assignee picker (dispatch this plate to a person) — the field lives on the LPN, persisted on save.
+      document.getElementById('e-assignee').innerHTML = assigneePickerOptions(l.site, l.assignee);
+
+      // toggle decision form vs read-only (already-decided) note
+      document.getElementById('decision-panel').style.display = decided ? 'none' : '';
+      document.getElementById('save-btn').style.display = decided ? 'none' : '';
+      const dn = document.getElementById('decided-note');
+      if (decided){
+        const failed = ['quarantine','damaged','hold'].includes(l.status);
+        dn.style.display = '';
+        dn.innerHTML = `This plate was already inspected — current status <b>${l.status}</b> ${failed ? '(rejected — excluded from availability)' : '(accepted — released for putaway)'}.`;
+        show('detail'); return;
+      }
+      dn.style.display = 'none';
+
+      acc = l.qty;   // default: accept the whole plate
+      fillReasons(false);   // populate reject reasons for the default disposition (fresh — no pick)
+      document.getElementById('d-acc').max = l.qty;
+      document.getElementById('d-acc').value = acc;
+      // shared photo / note widgets — evidence for any rejected units (ref = LPN id)
+      document.getElementById('d-photos').innerHTML = photoField({ ref: l.id, level:'line', title:'Inspection photos' });
+      document.getElementById('d-notef').innerHTML = noteField({ ref: l.id, level:'line', title:'Inspection note' });
+      updateAccNote();
+      show('detail');
+    }
+
+    function setAcc(which){ if (!cur) return; acc = which === 'all' ? cur.qty : 0; document.getElementById('d-acc').value = acc; updateAccNote(); }
+    function onAccInput(){
+      if (!cur) return;
+      let v = Math.floor(Number(document.getElementById('d-acc').value)||0);
+      if (v < 0) v = 0; if (v > cur.qty) v = cur.qty;
+      document.getElementById('d-acc').value = v; acc = v; updateAccNote();
+    }
+    function updateAccNote(){
+      const p = DB.products.find(x=>x.id===cur.product)||{}, u = p.uom || 'unit(s)';
+      const rej = cur.qty - acc, note = document.getElementById('acc-note');
+      note.innerHTML = rej === 0
+        ? `Accepting the whole plate (<b>${acc}</b> ${u}) → putaway.`
+        : acc === 0
+          ? `Rejecting the whole plate (<b>${rej}</b> ${u}) — nothing goes to stock.`
+          : `Accepting <b>${acc}</b> → putaway · rejecting <b>${rej}</b> ${u} (won't enter stock).`;
+      document.getElementById('reject-block').style.display = rej > 0 ? '' : 'none';
+    }
+
+    /* ---- save ---- */
+    function saveInspection(){
+      if (!cur) return;
+      if (cur.status !== 'to-inspect'){ alert('This plate is no longer pending inspection.'); return; }
+      // Dispatch: persist the assignee onto the live plate before the split so the accepted child inherits it.
+      const who = document.getElementById('e-assignee') ? document.getElementById('e-assignee').value : '';
+      cur.assignee = who || undefined;
+      const rej = cur.qty - acc;
+      let disp = '', reason = '';
+      if (rej > 0){
+        disp = document.getElementById('d-disp').value;
+        reason = document.getElementById('d-reason').value;
+        if (!reason){ alert('A reason is required to reject units.'); return; }
+      }
+      const p = DB.products.find(x=>x.id===cur.product)||{}, u = p.uom || '';
+      const res = inspectionSplit(cur.id, acc, { disposition: disp || 'quarantine', reason, user:'Benjamin Felix — Supervisor' });
+      if (!res){ alert('Could not record — the plate is no longer pending inspection.'); renderList(); show('list'); return; }
+      const rejWhere = disp === 'hold' ? 'Hold'
+        : `${disp === 'damaged' ? 'Damaged' : 'Quarantine'} (${locName((lpnById(res.rejectedId)||{}).loc)})`;
+      let msg;
+      if (res.rejected === 0){
+        msg = `<b>${res.acceptedId}</b> accepted (${res.accepted} ${u}) — released to ${locName(cur.loc)}, ready for putaway.`;
+      } else if (res.accepted === 0){
+        msg = `<b>${res.rejectedId}</b> rejected (${res.rejected} ${u}) — routed to <b>${rejWhere}</b> (${reason}). Excluded from availability — does not enter stock.`;
+      } else {
+        msg = `<b>${cur.id}</b> split: <b>${res.accepted} ${u}</b> accepted → putaway (<span class="mono">${res.acceptedId}</span>); <b>${res.rejected}</b> rejected → ${rejWhere} (<span class="mono">${res.rejectedId}</span>, ${reason}) — does not enter stock.`;
+      }
+      const b = document.getElementById('insp-banner');
+      b.innerHTML = msg; b.style.display = 'block';
+      cur = null;
+      renderList(); show('list');
+    }
+
+    /* ---- view toggle + filter ---- */
+    function show(v){
+      document.getElementById('view-list').style.display = v === 'list' ? '' : 'none';
+      document.getElementById('view-detail').style.display = v === 'detail' ? '' : 'none';
+      window.scrollTo(0,0);
+    }
+    function toggleFilter(btn){
+      const f = document.getElementById('filters'); const hidden = f.style.display === 'none';
+      f.style.display = hidden ? '' : 'none'; btn.textContent = hidden ? 'Hide filter' : 'Show filter';
+    }
+
+    /* ---- init: Assignee filter (all sites) ---- */
+    document.getElementById('f-assignee').innerHTML = assigneeFilterOptions('', state.assignee);
+    document.getElementById('f-assignee').addEventListener('change', e => { state.assignee = e.target.value; renderList(); });
+
+    renderList();
+  </script>
+</body></html>

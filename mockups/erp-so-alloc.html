@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Allocation — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="so-alloc" data-erp-title="Stock-Out"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Stock-Out › Allocation">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .sum-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 22px; }
+      .sum-grid .k { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); }
+      .sum-grid .v { font-weight:600; }
+
+      .tag { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line);
+        background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tag.tag-ok    { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tag.tag-info  { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tag.tag-rule  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .tag.tag-muted { color:var(--ink-faint); }
+
+      .line-box { border:1px solid var(--line-soft); border-radius:var(--radius); padding:14px 16px; margin-bottom:14px; background:var(--white); }
+      .line-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px; }
+      .line-head .ttl { font-weight:700; font-size:15px; }
+      .line-head .rule { display:inline-flex; align-items:center; gap:6px; }
+      .line-head .right { margin-left:auto; }
+      .line-sub { color:var(--ink-soft); font-size:12px; margin:2px 0 12px; }
+
+      table.alloc { width:100%; border-collapse:collapse; margin-bottom:10px; }
+      table.alloc th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em;
+        color:var(--ink-soft); border-bottom:1.5px solid var(--line); padding:6px 8px; white-space:nowrap; }
+      table.alloc td { padding:7px 8px; border-bottom:1px solid var(--line-soft); vertical-align:middle; font-size:13px; }
+      table.alloc .num { text-align:right; white-space:nowrap; }
+      table.alloc tr.off { opacity:.5; }
+      table.alloc input[type=number] { max-width:90px; }
+      table.alloc .why { display:flex; flex-wrap:wrap; gap:5px; }
+
+      .chosen { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:11px 14px;
+        border:1px solid var(--line); border-radius:var(--radius); background:var(--fill); }
+      .chosen.ok    { border-color:#6fae72; background:#eef7ef; }
+      .chosen.warn  { border-color:#caa24a; background:#fbf6e9; }
+      .chosen.error { border-color:#c47e7e; background:#f8eeee; }
+      .chosen .mark { font-size:20px; line-height:1; }
+      .chosen.ok .mark { color:var(--ok); } .chosen.warn .mark { color:#8a6d00; } .chosen.error .mark { color:var(--bad); }
+      .chosen .txt { flex:1; min-width:200px; } .chosen .txt b { display:block; }
+      .chosen .txt small { color:var(--ink-soft); }
+
+      .confirm-bar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+      .confirm-bar .sum { font-size:13px; color:var(--ink-soft); }
+      .confirm-bar .right { margin-left:auto; }
+    </style>
+
+    <!-- ===================== LIST ===================== -->
+    <div id="view-list">
+      <div id="al-banner" class="panel" style="display:none;background:var(--brand-tint);border-color:var(--brand);margin-bottom:12px"></div>
+
+      <div class="page-head"><h1>Allocation</h1>
+        <span class="muted" id="list-summary" style="align-self:center"></span>
+        <div class="acts"><button class="btn" disabled>Export</button></div>
+      </div>
+      <p class="sub">Reserve stock against each outbound order. The system allocates by <b>FEFO</b> (earliest expiry first) for expiry-tracked products and falls back to <b>FIFO</b> (oldest plate first) when a product carries no expiry. The recommended allocation is pre-filled; override any line manually. Confirm reserves the stock and flips the order to <b>allocated</b>, ready to pick. <span class="muted">(Or do it all in one pass on <a href="erp-so-fulfil.html">Express Fulfil</a>.)</span></p>
+
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Order reference</span><input id="f-ref"></label>
+          <label class="field"><span>Client</span><select id="f-client"></select></label>
+          <label class="field"><span>Site (operator)</span><select id="f-site"></select></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Client <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>Order</th><th><span class="funnel">▾</span>Client</th>
+          <th><span class="funnel">▾</span>Ref</th><th><span class="funnel">▾</span>Lines</th>
+          <th><span class="funnel">▾</span>Requested</th><th><span class="funnel">▾</span>Status</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ===================== DETAIL ===================== -->
+    <div id="view-detail" style="display:none">
+      <div class="page-head"><h1 id="d-title">Allocate order</h1>
+        <div class="acts">
+          <button class="btn btn-outline" onclick="releaseOrder()">Release allocation</button>
+          <button class="btn btn-outline" style="color:var(--bad)" onclick="cancelOrder()">Cancel order</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+        </div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to allocation list</a></div>
+
+      <div class="panel">
+        <fieldset><legend>Outbound order</legend>
+          <div class="sum-grid" id="d-summary"></div>
+          <div id="d-photos" style="margin-top:12px"></div>
+          <div id="d-notes" style="margin-top:12px"></div>
+        </fieldset>
+      </div>
+
+      <div id="lines-wrap"></div>
+
+      <div class="panel">
+        <div class="confirm-bar">
+          <div class="sum" id="confirm-sum"></div>
+          <div class="right">
+            <button class="btn btn-primary" id="confirm-btn" onclick="confirmAlloc()">Confirm allocation</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const TODAY = '2026-06-15';                                   // mocked "today" for expiry warnings
+    const daysTo = d => d ? Math.round((new Date(d) - new Date(TODAY)) / 864e5) : null;
+
+    /* ---- session state ---- */
+    const state = { site:'S-LYON', client:'all', ref:'' };
+    let cur = null;        // current order
+    let work = [];         // [{ product, qty, usesExpiry, rows:[{lpn,lot,expiry,from,free,reserved,take,on,tags,rank}] }]
+
+    /* ============================================================ LIST */
+    function allocList(){
+      return DB.outbound.filter(o => {
+        if (!['open','allocated','partial'].includes(o.status)) return false;   // 'partial' = back-order remainder to re-allocate
+        if (o.site !== state.site) return false;
+        if (state.client !== 'all' && o.client !== state.client) return false;
+        if (state.ref){ const hay=(o.id+' '+(o.ref||'')).toLowerCase(); if(!hay.includes(state.ref)) return false; }
+        return true;
+      });
+    }
+    function renderList(){
+      const list = allocList();
+      $('rows').innerHTML = list.length ? list.map(o => {
+        const t = outTotals(o);
+        return `<tr>
+          <td><input type="checkbox" style="width:auto"></td><td class="dots">⋮</td>
+          <td class="mono"><a href="#" onclick="openAlloc('${o.id}');return false">${o.id}</a>${o.fullStockOut?' <span class="tag" style="font-size:10px">FULL</span>':''}${o.status==='partial'?' <span class="tag tag-rule" style="font-size:10px">back-order</span>':''}</td>
+          <td>${dbName('clients', o.client)}</td>
+          <td class="mono">${esc(o.ref||'—')}</td>
+          <td>${o.lines.length}</td>
+          <td>${o.fullStockOut ? 'all available' : (o.status==='partial'?`${t.remaining} <span class="muted">(of ${t.req})</span>`:t.req)}</td>
+          <td>${statusBadge(o.status)}</td>
+          <td><a href="#" onclick="openAlloc('${o.id}');return false">${o.status==='partial'?'Allocate remainder ›':'Allocate ›'}</a></td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="9" class="muted" style="padding:18px">No orders awaiting allocation at ${dbName('sites',state.site)}.</td></tr>`;
+      const total = DB.outbound.filter(o=>o.status==='open' && o.site===state.site).length;
+      $('list-summary').textContent = `${list.length} order(s) shown · ${total} open at ${dbName('sites',state.site)}`;
+    }
+
+    /* ============================================================ ENGINE */
+    // Build candidate rows for a line, FEFO/FIFO-ordered, pre-filling `take` to meet demand.
+    function buildLine(line){
+      const p = DB.products.find(x=>x.id===line.product) || {};
+      if (line.cancelled) return { product:line.product, cancelled:true, qty:0, ordered:line.qty||0, shipped:0, uom:p.uom||'', usesExpiry:false, serial:false, rows:[], frozen:null };
+      const { usesExpiry, list } = outboundCandidates(line.product, cur.client, cur.site, cur.id);
+      const need = cur.fullStockOut ? Infinity : lineRemaining(line);   // remaining = ordered − already shipped
+      // seed from an existing saved allocation if present, else greedy fill
+      const saved = {};
+      (line.alloc||[]).forEach(a => saved[a.lpn] = a.qty);
+      let remaining = need; const hasSaved = (line.alloc||[]).length>0;
+      const rows = list.map((l, i) => {
+        const free = lpnAvail(l.id, cur.id);
+        const reserved = outReserved(l.id, cur.id);
+        let take = 0, on = false;
+        if (hasSaved){ if (saved[l.id]!=null){ take = Math.min(saved[l.id], free); on = take>0; } }
+        else if (remaining > 0){ take = cur.fullStockOut ? free : Math.min(free, remaining); on = take>0; remaining -= take; }
+        const tags = [];
+        if (usesExpiry){
+          tags.push({ t: i===0 ? 'Earliest expiry' : `FEFO #${i+1}`, cls: i===0?'tag-ok':'tag-info' });
+          const dd = daysTo(l.expiry);
+          if (dd!=null && dd < 0)       tags.push({ t:'Expired', cls:'tag-rule' });
+          else if (dd!=null && dd<=30)  tags.push({ t:`Expires in ${dd}d`, cls:'tag-rule' });
+        } else {
+          tags.push({ t: i===0 ? 'Oldest plate' : `FIFO #${i+1}`, cls: i===0?'tag-ok':'tag-info' });
+        }
+        if (reserved>0) tags.push({ t:`${reserved} reserved by another order`, cls:'tag-muted' });
+        return { lpn:l.id, lot:l.lot||'', expiry:l.expiry||'', from:l.loc, free, reserved, take, on, tags, rank:i };
+      });
+      // Stock excluded by an active FROZEN stock-take (outboundCandidates already drops it) — surfaced so a
+      // resulting short isn't mysterious. Only shows when a take is frozen over the line's stock.
+      const frozenLocked = DB.lpns.filter(l => l.product===line.product && l.client===cur.client && l.site===cur.site &&
+        l.status==='available' && !isExpired(l) && lpnAvail(l.id, cur.id)>0 && isLocFrozen(l.loc));
+      const frozen = frozenLocked.length ? { units:frozenLocked.reduce((s,l)=>s+lpnAvail(l.id,cur.id),0),
+        plates:frozenLocked.length, take:(frozenTakeFor(frozenLocked[0].loc)||{}).id } : null;
+      return { product:line.product, qty:lineRemaining(line), ordered:line.qty||0, shipped:lineShipped(line),
+        uom:p.uom||'', usesExpiry, serial:!!(p.track&&p.track.serial), rows, frozen };
+    }
+
+    function autoFill(idx){
+      const w = work[idx];
+      let remaining = cur.fullStockOut ? Infinity : w.qty;
+      w.rows.forEach(r => {
+        const take = cur.fullStockOut ? r.free : Math.max(0, Math.min(r.free, remaining));
+        r.take = take; r.on = take>0; if (!cur.fullStockOut) remaining -= take;
+      });
+      renderLine(idx); renderConfirm();
+    }
+    function clearLine(idx){ work[idx].rows.forEach(r=>{ r.take=0; r.on=false; }); renderLine(idx); renderConfirm(); }
+
+    function lineAllocated(w){ return w.rows.reduce((s,r)=> s + (r.on ? (+r.take||0) : 0), 0); }
+    function lineTarget(w){ return cur.fullStockOut ? w.rows.reduce((s,r)=>s+r.free,0) : w.qty; }
+
+    /* ============================================================ DETAIL RENDER */
+    function renderDetail(order){
+      cur = order;
+      const t = outTotals(order);
+      $('d-title').textContent = `Allocate ${order.id}`;
+      $('d-summary').innerHTML = [
+        ['Order', order.id],
+        ['Client', dbName('clients', order.client)],
+        ['Site', dbName('sites', order.site)],
+        ['Client ref', order.ref || '—'],
+        ['Created', order.created || '—'],
+        ['Type', order.fullStockOut ? 'Full stock-out' : 'Partial (by line)'],
+        ['Lines', order.lines.length],
+        ['Status', order.status],
+      ].map(([k,v]) => `<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+      // optional order-level photo evidence (header ref = order id)
+      $('d-photos').innerHTML = photoField({ ref:order.id, level:'header', title:'Order photos (optional)' });
+      $('d-notes').innerHTML = noteField({ ref:order.id, level:'header', title:'Order notes (optional)' });
+
+      work = order.lines.map(buildLine);
+      $('lines-wrap').innerHTML = work.map((w,i)=>lineHtml(w,i)).join('');
+      work.forEach((w,i)=>renderLine(i));
+      renderConfirm();
+    }
+
+    function lineHtml(w, idx){
+      if (w.cancelled) return `<div class="line-box" id="line-${idx}" style="opacity:.6"><div class="line-head"><span class="ttl">Line ${idx+1} — ${esc(prodName(w.product))}</span> <span class="tag tag-rule">line cancelled — excluded from allocation</span></div></div>`;
+      const ruleBadge = w.usesExpiry
+        ? `<span class="tag tag-info">FEFO</span> <small class="muted">earliest expiry first</small>`
+        : `<span class="tag tag-muted">FIFO</span> <small class="muted">no expiry tracked · oldest plate first</small>`;
+      return `<div class="line-box" id="line-${idx}">
+        <div class="line-head">
+          <span class="ttl">Line ${idx+1} — ${esc(prodName(w.product))}</span>
+          <span class="rule">${ruleBadge}</span>
+          <span class="right" style="display:inline-flex;align-items:center;gap:8px">
+            ${photoField({ ref:`${cur.id}:L${idx}`, level:'line' })}
+            ${noteField({ ref:`${cur.id}:L${idx}`, level:'line', title:'Line note' })}
+            <button class="btn btn-sm btn-outline" onclick="autoFill(${idx})">Auto-fill ${w.usesExpiry?'FEFO':'FIFO'}</button>
+            <button class="btn btn-sm btn-outline" onclick="clearLine(${idx})">Clear</button>
+          </span>
+        </div>
+        ${w.frozen ? `<div style="color:#7a2c2c;font-size:12px;margin:2px 0 6px">⚠ ${w.frozen.units} unit(s) on ${w.frozen.plates} plate(s) are excluded — inside a frozen stock-take (${esc(w.frozen.take)}). They can't be allocated until it is posted or abandoned.</div>` : ''}
+        <div class="line-sub">${w.shipped>0?`Back-order — <b>${w.shipped}</b> of ${w.ordered} ${esc(w.uom)} already shipped; allocating the remaining `:'Requested '}<b>${cur.fullStockOut?'all available':w.qty+' '+esc(w.uom)}</b>${w.serial?' · serial-tracked — serials are captured at picking':''}.</div>
+        <div id="cand-${idx}"></div>
+        <div id="lsum-${idx}"></div>
+      </div>`;
+    }
+
+    function renderLine(idx){
+      const w = work[idx];
+      if (w.cancelled) return;
+      if (!w.rows.length){
+        $('cand-'+idx).innerHTML = `<p class="muted" style="margin:4px 0">No available stock for this product at ${esc(dbName('sites',cur.site))}.</p>`;
+      } else {
+        const head = `<tr><th style="width:34px"></th><th>LPN</th>${w.usesExpiry?'<th>Lot</th><th>Expiry</th>':''}<th>From</th><th class="num">Free</th><th class="num">Allocate</th><th>Why</th></tr>`;
+        const body = w.rows.map((r,ri)=>{
+          const lc = DB.locations.find(x=>x.id===r.from)||{};
+          return `<tr class="${r.on?'':'off'}">
+            <td><input type="checkbox" ${r.on?'checked':''} onchange="toggleRow(${idx},${ri},this.checked)"></td>
+            <td class="mono">${r.lpn}</td>
+            ${w.usesExpiry?`<td class="mono">${esc(r.lot||'—')}</td><td>${esc(r.expiry||'—')}</td>`:''}
+            <td class="mono">${esc(lc.structured||r.from)}</td>
+            <td class="num">${r.free}</td>
+            <td class="num"><input type="number" min="0" max="${r.free}" value="${r.take||0}" ${r.on?'':'disabled'} onchange="setTake(${idx},${ri},this.value)"></td>
+            <td><div class="why">${r.tags.map(tg=>`<span class="tag ${tg.cls}">${esc(tg.t)}</span>`).join('')}</div></td>
+          </tr>`;
+        }).join('');
+        $('cand-'+idx).innerHTML = `<table class="alloc"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+      }
+      // line summary bar
+      const got = lineAllocated(w), target = lineTarget(w);
+      const lsum = $('lsum-'+idx);
+      if (cur.fullStockOut){
+        lsum.innerHTML = `<div class="chosen ok"><span class="mark">✓</span><div class="txt"><b>Full stock-out — ${got} ${esc(w.uom)} across ${w.rows.filter(r=>r.on).length} LPN(s)</b><small>All available stock for this product is being allocated.</small></div></div>`;
+      } else if (got === 0){
+        lsum.innerHTML = `<div class="chosen error"><span class="mark">✕</span><div class="txt"><b>Nothing allocated</b><small>Allocate stock to fulfil ${target} ${esc(w.uom)}, or this line ships short.</small></div></div>`;
+      } else if (got < target){
+        lsum.innerHTML = `<div class="chosen warn"><span class="mark">⚠</span><div class="txt"><b>Short pick — ${got} / ${target} ${esc(w.uom)} (short ${target-got})</b><small>Only ${w.rows.reduce((s,r)=>s+r.free,0)} ${esc(w.uom)} available. Confirm to allocate partially (remainder back-orders), or adjust.</small></div></div>`;
+      } else if (got > target){
+        lsum.innerHTML = `<div class="chosen error"><span class="mark">✕</span><div class="txt"><b>Over-allocated — ${got} / ${target} ${esc(w.uom)}</b><small>Reduce the allocated quantities — you cannot reserve more than requested.</small></div></div>`;
+      } else {
+        lsum.innerHTML = `<div class="chosen ok"><span class="mark">✓</span><div class="txt"><b>Fully allocated — ${got} / ${target} ${esc(w.uom)}</b><small>FEFO/FIFO selection meets the request.</small></div></div>`;
+      }
+    }
+
+    function toggleRow(idx, ri, on){
+      const r = work[idx].rows[ri];
+      r.on = on;
+      if (on && (!r.take || r.take<=0)){ // default to filling the remaining need (capped at free)
+        const w = work[idx]; const got = lineAllocated(w) ; const need = cur.fullStockOut ? r.free : Math.max(0, w.qty - got);
+        r.take = cur.fullStockOut ? r.free : Math.min(r.free, need || r.free);
+      }
+      if (!on) r.take = 0;
+      renderLine(idx); renderConfirm();
+    }
+    function setTake(idx, ri, val){
+      const r = work[idx].rows[ri];
+      let v = Math.max(0, Math.min(+val||0, r.free));
+      r.take = v; r.on = v>0;
+      renderLine(idx); renderConfirm();
+    }
+
+    function renderConfirm(){
+      let req=0, got=0, over=false, anyShort=false;
+      work.forEach(w => { const t=lineTarget(w), g=lineAllocated(w); req+=t; got+=g; if(g>t) over=true; if(g<t) anyShort=true; });
+      const can = got>0 && !over;
+      $('confirm-btn').disabled = !can;
+      $('confirm-btn').textContent = anyShort && !over ? 'Confirm (partial / short)' : 'Confirm allocation';
+      $('confirm-sum').innerHTML = over
+        ? `<span style="color:var(--bad)"><b>Over-allocated</b> — reduce quantities before confirming.</span>`
+        : `Allocating <b>${got}</b> of <b>${cur.fullStockOut?got:req}</b> requested unit(s) across ${work.reduce((s,w)=>s+w.rows.filter(r=>r.on).length,0)} LPN(s)${anyShort?` · <span style="color:#8a6d00">some lines short (back-order remainder)</span>`:''}.`;
+    }
+
+    function confirmAlloc(){
+      if (!cur) return;
+      let over=false; work.forEach(w=>{ if(lineAllocated(w)>lineTarget(w)) over=true; });
+      if (over) return;
+      // write allocations back to the order (mock commit, session only)
+      cur.lines.forEach((line, i) => {
+        const w = work[i];
+        line.alloc = w.rows.filter(r=>r.on && r.take>0).map(r => ({
+          lpn:r.lpn, lot:r.lot, expiry:r.expiry, from:r.from, qty:+r.take, picked:0 }));
+      });
+      cur.status = 'allocated';
+      const t = outTotals(cur);
+      $('al-banner').innerHTML = `<b>${esc(cur.id)}</b> allocated — <b>${t.allc}</b> unit(s) reserved across ${cur.lines.reduce((s,l)=>s+(l.alloc||[]).length,0)} LPN(s)${t.short?' <span style="color:#8a6d00">(some lines short — remainder back-ordered)</span>':''}. Proceed to <a href="erp-so-dispatch.html?out=${esc(cur.id)}">Pick / Dispatch ›</a>.`;
+      $('al-banner').style.display = 'block';
+      cur = null; renderList(); show('list');
+    }
+
+    // F18 — release / cancel mid-flight (mirrors erp-so-orders), then back to the orders list.
+    function releaseOrder(){
+      if (!cur) return;
+      if (!['allocated','picking','picked'].includes(cur.status)){ alert('Only an allocated / picking / picked order can be released.'); return; }
+      if (!confirm(`Release allocation for ${cur.id}? The reserved stock is freed and the order returns to OPEN for re-allocation.`)) return;
+      cur.lines.forEach(l=>{ l.alloc=[]; }); cur.status='open';
+      cur=null; renderList(); show('list'); location.href='erp-so-orders.html';
+    }
+    function cancelOrder(){
+      if (!cur) return;
+      if (cur.status==='dispatched'){ alert('A fully dispatched order cannot be cancelled — the stock has already shipped.'); return; }
+      if (cur.status==='cancelled') return;
+      const shipped = (cur.shipments||[]).length>0;
+      const msg = shipped
+        ? `Cancel the remaining balance of ${cur.id}? Already-shipped deliveries are kept; the un-shipped remainder is cancelled and reserved stock freed.`
+        : `Cancel order ${cur.id}? Any reserved stock is freed.`;
+      if (!confirm(msg)) return;
+      cur.lines.forEach(l=>{ l.alloc=[]; }); cur.status='cancelled';
+      cur=null; renderList(); show('list'); location.href='erp-so-orders.html';
+    }
+
+    function openAlloc(id){ const o=DB.outbound.find(x=>x.id===id); if(!o) return; renderDetail(o); show('detail'); }
+
+    /* ---- view toggle + filter ---- */
+    function show(v){ $('view-list').style.display=v==='list'?'':'none'; $('view-detail').style.display=v==='detail'?'':'none'; window.scrollTo(0,0); }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    /* ---- init ---- */
+    $('f-client').innerHTML = `<option value="all">All clients</option>` + DB.clients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    $('f-site').innerHTML   = DB.sites.map(s=>`<option value="${s.id}"${s.id===state.site?' selected':''}>${esc(s.name)}</option>`).join('');
+    $('f-client').addEventListener('change', e=>{ state.client=e.target.value; renderList(); });
+    $('f-site').addEventListener('change',   e=>{ state.site=e.target.value; renderList(); });
+    $('f-ref').addEventListener('input',     e=>{ state.ref=e.target.value.trim().toLowerCase(); renderList(); });
+
+    renderList();
+    // deep-link: ?out=<id> opens that order's allocation directly
+    const urlOut = new URLSearchParams(location.search).get('out');
+    if (urlOut){ const o=DB.outbound.find(x=>x.id===urlOut); if(o){ state.site=o.site; $('f-site').value=o.site; renderList(); openAlloc(urlOut); } }
+  </script>
+</body></html>

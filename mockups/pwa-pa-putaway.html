@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Putaway — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-pwa-title="Putaway" data-pwa-back="pwa-home.html" data-pwa-assignable="1">
+  <div id="page-content">
+    <div id="pa-flash" class="sb-msg" style="display:none"></div>
+    <div id="pa"></div>
+  </div>
+  <script src="assets/data.js"></script>
+  <script src="assets/pwa-scan.js"></script>
+  <script src="assets/pwa-shell.js"></script>
+  <script>
+  (function(){
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const root = $('pa');
+    const site = () => PWA.ctx.siteId, client = () => PWA.ctx.clientId;
+    const uomOf = pid => (DB.products.find(x=>x.id===pid)||{}).uom || '';
+    const S = { view:'list', tab:'open', lpnId:null, palletId:null, lineIdx:0, bin:null, placeQty:null, banner:null, rejectOpen:false };
+    const clientOf = pid => (DB.products.find(x=>x.id===pid)||{}).client || '';
+    // Read-only "already placed" rows for the partial-progress view (newest first).
+    function placedRows(placements){
+      return placements.slice().reverse().map(t=>{
+        const pu=uomOf(t.product);
+        return `<div class="task" style="opacity:.92"><span class="meta"><b>${esc(t.qty+' '+pu)} → ${esc(locName(t.to))}</b>
+          <small>${esc(prodName(t.product))} · ${esc(t.lpn)}${t.ts?' · '+esc(t.ts):''}</small></span><span class="badge b-available">✓ placed</span></div>`;
+      }).join('');
+    }
+
+    function flash(t){ const m=$('pa-flash'); if(m){ m.textContent=t; m.style.background=''; m.style.color=''; m.style.borderColor=''; m.style.display='block'; window.scrollTo(0,0); } }
+    function ok(t){ const m=$('pa-flash'); if(m){ m.textContent=t; m.style.background='#e6f3e7'; m.style.color='#235c25'; m.style.borderColor='#6fae72'; m.style.display='block'; window.scrollTo(0,0); } }
+    function flashClear(){ const m=$('pa-flash'); if(m) m.style.display='none'; }
+
+    /* ---------- slotting: rank valid bins (home → consolidate → category → open) ---------- */
+    function rankBins(product, cl, qty, st){
+      const p = DB.products.find(x=>x.id===product)||{};
+      const pref = (p.preferred||[]).filter(x=>x.site===st);
+      const valid=[], excluded=[];
+      DB.locations.filter(b=>b.type==='storage' && b.site===st && b.status!=='inactive').forEach(b=>{
+        if (isLocFrozen(b.id)){ excluded.push({loc:b, reason:'frozen — '+((frozenTakeFor(b.id)||{}).id||'')}); return; }
+        if (!binSegregationOk(b.id, cl)){ excluded.push({loc:b, reason:'segregated to another client'}); return; }
+        const cap = binCapacityForAdd(b.id, qty, product);
+        if (!cap.ok){ excluded.push({loc:b, reason:'full — '+cap.fails.map(f=>f.dim).join('/')}); return; }
+        const area = areaInfo(st, b.area);
+        const catOk = area && (((area.preferredCategories||[]).indexOf(p.category)>=0) || ((area.preferredSubCategories||[]).indexOf(p.subCategory)>=0));
+        const hasSame = DB.lpns.some(l=>l.loc===b.id && l.product===product && l.status==='available' && (l.qty||0)>0);
+        const isHome = pref.some(x=>(x.mode==='location'&&x.ref===b.id)||(x.mode==='area'&&x.ref===b.area));
+        let tier=3, label='open bin';
+        if (isHome){ tier=0; label='home (preferred)'; }
+        else if (hasSame){ tier=1; label='consolidate (same product here)'; }
+        else if (catOk){ tier=2; label='category match'; }
+        const a=cap.after;
+        const hr = `${a.units}${b.maxUnits!=null?'/'+b.maxUnits:''}u`
+          + (b.maxWeightKg!=null?` · ${a.weight}/${b.maxWeightKg}kg`:'')
+          + (b.maxLpns!=null?` · ${a.lpns}/${b.maxLpns} slots`:'');
+        valid.push({ loc:b, tier, label, hr });
+      });
+      valid.sort((x,y)=> x.tier-y.tier || x.loc.id.localeCompare(y.loc.id));
+      return { valid, excluded };
+    }
+    // Commit-time guard (re-checked against live stock on confirm, per the locked invariant).
+    function validateBin(binId, product, qty, cl){
+      const b=DB.locations.find(x=>x.id===binId);
+      if(!b || b.type!=='storage' || b.status==='inactive') return {ok:false, msg:'Not an active storage bin.'};
+      if(b.site!==site()) return {ok:false, msg:'That bin is at another site.'};
+      if(isLocFrozen(binId)) return {ok:false, msg:`${locName(binId)} is in a frozen stock-take (${(frozenTakeFor(binId)||{}).id||''}).`};
+      if(!binSegregationOk(binId, cl)) return {ok:false, msg:`${locName(binId)} is segregated to another client.`};
+      const cap=binCapacityForAdd(binId, qty, product); if(!cap.ok) return {ok:false, msg:`${locName(binId)} over capacity (${cap.fails.map(f=>f.dim).join(', ')}).`};
+      return {ok:true};
+    }
+
+    /* ---------- shared "pick a destination" block (suggestions + scan + excluded) ---------- */
+    function placeBlock(ranked){
+      const recId = ranked.valid[0] ? ranked.valid[0].loc.id : null;
+      const cards = ranked.valid.length
+        ? ranked.valid.slice(0,5).map(v=>{
+            const sel = v.loc.id===S.bin;
+            return `<div class="task" data-bin="${v.loc.id}" style="${sel?'border-color:#2f6fed;background:#eef4ff':''}">
+              <span class="meta"><b>${esc(v.loc.structured||v.loc.id)}</b>
+                <small>${esc(v.label)}${v.loc.id===recId?' · ★ recommended':''} · ${esc(v.hr)}</small></span>
+              ${sel?'<span class="badge b-available">✓ selected</span>':'<span class="badge b-toputaway">pick</span>'}</div>`;
+          }).join('')
+        : `<p class="scan-hint" style="text-align:left;color:var(--bad)">No valid bin — every candidate is full, frozen or segregated.</p>`;
+      const exc = ranked.excluded.slice(0,4).map(e=>
+        `<div class="task" style="opacity:.55"><span class="meta"><b>${esc(e.loc.structured||e.loc.id)}</b><small>excluded · ${esc(e.reason)}</small></span></div>`).join('');
+      return PWAScan.field({ id:'sf-bin', prompt:'Scan a destination bin', placeholder:'1-A-01-R1-B01', kinds:['location'],
+               list:ranked.valid.map(v=>({value:v.loc.id,label:v.loc.structured||v.loc.id,sub:v.label})), onScan:onScanBin })
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Suggested bins</p>${cards}`
+        + (exc?`<p class="scan-hint" style="text-align:left;margin-left:2px">Not available</p>${exc}`:'');
+    }
+    function wirePlace(){ root.querySelectorAll('[data-bin]').forEach(el=>el.onclick=()=>{ S.bin=el.dataset.bin; render(); }); }
+    function onScanBin(code, r){ if (r && r.type==='location'){ S.bin=r.id; render(); } else flash('Scan a storage location / bin.'); }
+
+    /* ---------- LIST (tabs: To do · Completed) ---------- */
+    function tabsHtml(){
+      return `<div class="tabs">
+        <a href="#" id="t-open" class="${S.tab!=='done'?'active':''}">To do</a>
+        <a href="#" id="t-done" class="${S.tab==='done'?'active':''}">Completed</a></div>`;
+    }
+    function wireTabs(){
+      const o=$('t-open'), d=$('t-done');
+      if(o) o.onclick=e=>{ e.preventDefault(); S.tab='open'; render(); };
+      if(d) d.onclick=e=>{ e.preventDefault(); S.tab='done'; render(); };
+    }
+    function renderList(){ if (S.tab==='done') return renderDone(); renderToDo(); }
+    // Assignee row + self-claim / release (role-gated in the coding phase). rec = the LPN or pallet object.
+    function whoClaim(rec){
+      const who   = rec.assignee ? esc(assigneeName(rec.assignee))+(isMine(rec)?' · me':'') : '<span class="muted">Any</span>';
+      const claim = rec.assignee ? (isMine(rec) ? ` · <a href="#" class="claim-btn" data-rel="${rec.id}">Release</a>` : '') : ` · <a href="#" class="claim-btn" data-claim="${rec.id}">Claim</a>`;
+      return `<small style="margin-top:3px">👤 ${who}${claim}</small>`;
+    }
+    function renderToDo(){
+      const lpns = DB.lpns.filter(l=>l.status==='to-putaway' && l.site===site() && l.client===client() && (!PWA.mineOnly() || isMine(l)));
+      const plts = palletsAtSite(site(), client()).filter(p=>!PWA.mineOnly() || isMine(p));
+      const lpnCards = lpns.map(l=>{
+          const prog=lpnPutawayProgress(l.id);
+          return `<div class="task" data-lpn="${l.id}"><span class="meta"><b>${esc(l.id)}</b>
+          <small>${esc(prodName(l.product))} · ${l.qty} ${esc(prodUom(l.product))}${prog?` · <b style="color:#7a5a07">${prog.placed}/${prog.original} placed</b>`:''}</small>
+          ${whoClaim(l)}</span><span class="badge b-toputaway">${prog?'partial':'put away'}</span></div>`;
+        }).join('') || `<p class="scan-hint" style="text-align:left">— none —</p>`;
+      const pltCards = plts.map(p=>{ const t=palletTotals(p);
+          const placedLines = p.lines.length - palletOpenLines(p).length, started = placedLines>0;
+          return `<div class="task" data-plt="${p.id}"><span class="meta"><b>${esc(p.id)}</b>
+          <small>mixed pallet · ${t.lines} left · ${t.units} units${started?` · <b style="color:#7a5a07">${placedLines}/${p.lines.length} placed</b>`:''}</small>
+          ${whoClaim(p)}</span><span class="badge b-toputaway">${started?'partial':'decompose'}</span></div>`;
+        }).join('') || `<p class="scan-hint" style="text-align:left">— none —</p>`;
+      const empty = !lpns.length && !plts.length;
+      root.innerHTML = tabsHtml() +
+        PWAScan.field({ id:'sf-pa', prompt:'Scan an LPN or pallet', autofocus:true, placeholder:'LPN-00012 · PLT-00001',
+          list:[].concat(lpns.map(l=>({value:l.id,label:l.id,sub:prodName(l.product)})), plts.map(p=>({value:p.id,label:p.id,sub:'mixed pallet'}))), onScan:onScanTask })
+        + (empty ? `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">Nothing to put away at ${esc(PWA.siteName())}.</p></div>`
+          : `<p class="scan-hint" style="text-align:left;margin-left:2px">Single plates (${lpns.length})</p>${lpnCards}`
+            + `<p class="scan-hint" style="text-align:left;margin-left:2px">Mixed pallets (${plts.length})</p>${pltCards}`);
+      wireTabs();
+      root.querySelectorAll('[data-lpn]').forEach(el=>el.onclick=()=>openLpn(el.dataset.lpn));
+      root.querySelectorAll('[data-plt]').forEach(el=>el.onclick=()=>openPallet(el.dataset.plt));
+      // self-claim / release — stop the click bubbling to the card's openLpn/openPallet
+      root.querySelectorAll('.claim-btn').forEach(el=>el.onclick=ev=>{ ev.preventDefault(); ev.stopPropagation();
+        const id=el.dataset.claim||el.dataset.rel, rec=lpnById(id)||palletById(id); if(!rec) return;
+        rec.assignee = el.dataset.claim ? DB.currentUserId : ''; PWA.save(); render(); });
+      const i=root.querySelector('.sb-input'); if(i) i.focus();
+    }
+    /* ---------- Completed (putaway history; tap a row to re-print its label) ---------- */
+    function putawayTxns(){
+      return (DB.txns||[]).filter(t => t.type==='putaway' && t.site===site() && clientOf(t.product)===client())
+        .slice().reverse().slice(0,25);   // newest first
+    }
+    function renderDone(){
+      const list = putawayTxns();
+      const cards = list.length ? list.map(t=>{
+        const p=DB.products.find(x=>x.id===t.product)||{};
+        // F17a: tap the row to reprint; "Move ▸" deep-links the intra-site Move flow pre-filled with this plate (mis-putaway undo).
+        return `<div class="task" data-rl="${esc(t.lpn)}"><span class="meta"><b>${esc(t.lpn)}</b>
+          <small>${esc(prodName(t.product))} · ${t.qty} ${esc(p.uom||'')} → ${esc(locName(t.to))}${t.ts?' · '+esc(t.ts):''}</small></span>
+          <span style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <span class="badge b-available">reprint</span>
+            <a href="#" data-mv="${esc(t.lpn)}" style="font-size:12px;white-space:nowrap">Wrong bin? Move ▸</a></span></div>`;
+      }).join('')
+        : `<div class="success"><div class="check" style="color:var(--ink-faint)">✓</div><p class="muted">No completed putaways yet at ${esc(PWA.siteName())}.</p></div>`;
+      root.innerHTML = tabsHtml()
+        + `<p class="scan-hint" style="text-align:left;margin-left:2px">Recently put away (${list.length})</p>${cards}`
+        + (list.length?`<p class="scan-hint" style="text-align:left">Tap a row to re-print its label (nothing is re-minted) · use “Move ▸” if a plate went to the wrong bin.</p>`:'');
+      wireTabs();
+      root.querySelectorAll('[data-mv]').forEach(el=>el.onclick=e=>{ e.preventDefault(); e.stopPropagation(); location.href='pwa-inv-move.html?lpn='+encodeURIComponent(el.dataset.mv); });
+      root.querySelectorAll('[data-rl]').forEach(el=>el.onclick=()=>{ location.href='pwa-gr-lpn.html?lpn='+encodeURIComponent(el.dataset.rl); });
+    }
+    function onScanTask(code, r){
+      if (r && r.type==='lpn'){ const l=r.entity;
+        if (l.status!=='to-putaway') return flash(`${l.id} is not awaiting putaway (status: ${l.status}).`);
+        if (l.site!==site() || l.client!==client()) return flash(`${l.id} belongs to another client/site.`);
+        openLpn(l.id);
+      } else if (r && r.type==='pallet'){ const p=r.entity;
+        if (p.status!=='to-putaway') return flash(`${p.id} is already put away.`);
+        if (p.site!==site() || p.client!==client()) return flash(`${p.id} belongs to another client/site.`);
+        openPallet(p.id);
+      } else flash('Scan an LPN (LPN-…) or a pallet (PLT-…).');
+    }
+
+    /* ---------- SINGLE LPN putaway ---------- */
+    function openLpn(id){ S.view='lpn'; S.lpnId=id; S.bin=null; S.rejectOpen=false; S.placeQty=(DB.lpns.find(x=>x.id===id)||{}).qty||1; render(); }
+    // damage found at putaway: reason list follows the disposition, pulled live from Master Data › Reason Codes ('status' domain)
+    function fillRejReasons(preserve){
+      const dispEl=$('rej-disp'), sel=$('rej-reason'); if(!dispEl||!sel) return;
+      const prev = preserve ? sel.value : '';
+      sel.innerHTML = ['<option value="">— select —</option>']
+        .concat(reasonsFor('status', dispEl.value).map(r=>`<option${r===prev?' selected':''}>${esc(r)}</option>`)).join('');
+    }
+    // reject a sub-qty off a to-putaway plate → blocked disposition (quarantine/hold/damaged); good remainder keeps flowing
+    function confirmReject(){
+      const l=DB.lpns.find(x=>x.id===S.lpnId); if(!l){ S.view='list'; return render(); }
+      if (l.status!=='to-putaway') return flash(`${l.id} is no longer awaiting putaway.`);
+      let q=Math.floor(Number($('rej-qty').value)||0);
+      if (q<1) return flash('Enter how many units to reject.');
+      if (q>l.qty) q=l.qty;
+      const disp=$('rej-disp').value, reason=$('rej-reason').value;
+      if (!reason) return flash('A reason is required to reject units.');
+      const u=uomOf(l.product);
+      const res=putawayReject(l.id, q, { disposition:disp, reason, user:PWA.user });
+      if (!res) return flash('Could not reject — plate no longer awaiting putaway.');
+      PWA.save();
+      const rp=lpnById(res.rejectedId);
+      const where = disp==='hold' ? 'Hold' : `${disp==='damaged'?'Damaged':'Quarantine'} (${locName(rp?rp.loc:'')})`;
+      if (res.good===0){                               // whole plate rejected → nothing left to put away
+        S.banner=`${l.id} fully rejected — ${res.rejected} ${u} → ${where} (${reason}). Excluded from stock; nothing to put away.`;
+        S.view='list'; S.lpnId=null; S.bin=null; S.placeQty=null; S.rejectOpen=false; render(); return;
+      }
+      S.rejectOpen=false; S.bin=null; S.placeQty=l.qty; render();   // partial → reduced plate, keep placing the good remainder
+      ok(`${res.rejected} ${u} rejected → ${where} as ${res.rejectedId} (${reason}). ${res.good} ${u} left on ${l.id} to put away.`);
+    }
+    function renderLpn(){
+      const l=DB.lpns.find(x=>x.id===S.lpnId); if(!l){ S.view='list'; return render(); }
+      const p=DB.products.find(x=>x.id===l.product)||{};
+      if (S.placeQty==null || S.placeQty>l.qty || S.placeQty<1) S.placeQty=l.qty;
+      const q=S.placeQty, split=q<l.qty;
+      const expired = tracksExpiry(l.product) && isExpired(l);   // F9: expired stock cannot store to 'available'
+      if (expired) S.rejectOpen = true;                          // force the reject path open
+      const prog=lpnPutawayProgress(l.id);   // partial work already done on this plate?
+      const ranked=rankBins(l.product,l.client,q,site());
+      if (S.bin==null) S.bin = ranked.valid[0] ? ranked.valid[0].loc.id : null;
+      const pct = prog && prog.original ? Math.round(prog.placed/prog.original*100) : 0;
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(l.id)}</b> ${statusBadge(l.status)}${prog?' <span class="badge b-toputaway">partial</span>':''}
+          <div class="muted" style="margin-top:4px">${esc(prodName(l.product))} · ${l.qty} ${esc(p.uom||'')}${l.lot?' · lot '+esc(l.lot):''}${l.expiry?' · exp '+esc(l.expiry):''}</div>
+          <div class="muted">from ${esc(locName(l.loc))}</div></div>
+        ${expired?`<div class="panel" style="margin-bottom:10px;background:#f8eeee;border-color:#c47e7e">
+          <b style="color:#8a2020">⛔ Expired — cannot put away to available</b>
+          <div style="margin-top:4px;font-size:12.5px;color:#6b1f1f">Expired ${esc(l.expiry||'')} (today ${esc(WMS_TODAY)}). Store / confirm is blocked. Route the units to <b>Quarantine</b> or <b>Damaged</b> using <b>Report damage / reject</b> below.</div></div>`:''}
+        ${prog?`<div class="panel" style="margin-bottom:10px;background:#fbf6e9;border-color:#e3d4a3">
+          <b>Partially put away</b> — ${prog.placed} of ${prog.original} ${esc(p.uom||'')} placed · <b>${prog.remaining}</b> left here
+          <div style="height:7px;border-radius:5px;background:#e7e1cb;overflow:hidden;margin:8px 0"><i style="display:block;height:100%;width:${pct}%;background:#6fae72"></i></div>
+          <div class="muted" style="margin-bottom:4px;font-size:12px">Already placed (read-only)</div>${placedRows(prog.placements)}</div>`:''}
+        <button class="btn btn-outline" id="pa-reject-toggle" style="width:100%"${expired?' disabled':''}>${S.rejectOpen?'✕ Cancel reject':'⚠ Report damage / reject'}</button>
+        ${S.rejectOpen?`<div class="panel" style="margin:8px 0;background:#fbf6e9;border-color:#e3d4a3">
+          <div class="muted" style="font-size:12px;margin-bottom:8px">${expired?'Expired stock — route every unit to a blocked disposition (it never becomes available).':'Peel damaged units off this plate — they route to a blocked disposition (excluded from available stock); the good remainder stays to put away.'}</div>
+          <label class="field"><span>Quantity to reject (of ${l.qty})</span>
+            <input id="rej-qty" type="number" min="1" max="${l.qty}" step="1"${expired?` value="${l.qty}"`:''}></label>
+          <label class="field"><span>Disposition <span class="req">*</span></span>
+            <select id="rej-disp"><option value="quarantine">Quarantine (QA)</option><option value="hold">Hold</option><option value="damaged">Damaged</option></select></label>
+          <label class="field"><span>Reason <span class="req">*</span></span>
+            <select id="rej-reason"><option value="">— select —</option></select></label>
+          <button class="btn btn-primary" id="rej-confirm" style="width:100%">Reject units</button></div>`:''}
+        ${expired?'':`<label class="field"><span>Quantity to place into this bin</span>
+          <input id="pa-qty" type="number" min="1" max="${l.qty}" step="1" value="${q}"></label>
+        <div class="muted" style="margin:-4px 0 10px">${split?`Split — <b>${q}</b> placed here; <b>${l.qty-q}</b> stays a putaway task (child LPN).`:`Whole plate (<b>${l.qty}</b> ${esc(p.uom||'')}).`}</div>
+        ${placeBlock(ranked)}
+        ${ranked.valid.length?'':parkBlock(l.qty)}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="pa-confirm" style="width:100%"${S.bin?'':' disabled'}>${split?`Place ${q}`:'Confirm putaway'}${S.bin?' → '+esc(locName(S.bin)):''}</button>`}
+        <button class="btn btn-outline" id="pa-back" style="width:100%">‹ Back to worklist</button>`;
+      if (!expired){
+        wirePlace();
+        const qi=$('pa-qty'); if(qi) qi.onchange=()=>{ let v=Math.floor(Number(qi.value)||0); if(v<1)v=1; if(v>l.qty)v=l.qty; S.placeQty=v; S.bin=null; render(); };
+        const cf=$('pa-confirm'); if(cf) cf.onclick=confirmLpn;
+        const pk=$('pa-park'); if(pk) pk.onclick=parkLpn;   // F10
+      }
+      $('pa-back').onclick=()=>{ S.view='list'; S.lpnId=null; S.bin=null; S.placeQty=null; S.rejectOpen=false; render(); };
+      const rt=$('pa-reject-toggle'); if(rt && !expired) rt.onclick=()=>{ S.rejectOpen=!S.rejectOpen; render(); };
+      if (S.rejectOpen){
+        fillRejReasons(false);
+        const rd=$('rej-disp'); if(rd) rd.onchange=()=>fillRejReasons(true);
+        const rc=$('rej-confirm'); if(rc) rc.onclick=confirmReject;
+      }
+    }
+    function confirmLpn(){
+      const l=DB.lpns.find(x=>x.id===S.lpnId); if(!l){ S.view='list'; return render(); }
+      if (l.status!=='to-putaway') return flash(`${l.id} is no longer awaiting putaway.`);
+      if (tracksExpiry(l.product) && isExpired(l)) return flash('Expired stock cannot be put away — route it to Quarantine or Damaged via Report damage / reject.');   // F9
+      if (!S.bin) return flash('Select or scan a destination bin.');
+      const binId=S.bin, q=Math.min(Math.max(1,Math.floor(S.placeQty)||0), l.qty);
+      const v=validateBin(binId, l.product, q, l.client); if(!v.ok) return flash(v.msg);
+      // omit ref → a PARTIAL child's ref defaults to the source LPN id (links it for the partial-progress view)
+      const res=putawayPlace(l.id, binId, q, { user:PWA.user, note:`Putaway → ${locName(binId)}` });
+      PWA.save();
+      if (res && res.split && res.remainder>0){       // partial → stay on the (decremented) plate to place the rest
+        S.bin=null; S.placeQty=l.qty; S.view='lpn'; render();
+        ok(`${q} placed at ${locName(binId)} as ${res.placedId}. ${res.remainder} left on ${l.id} — pick the next bin.`);
+        return;
+      }
+      S.banner=`${l.id} put away at ${locName(binId)} — now available.`;
+      S.view='list'; S.lpnId=null; S.bin=null; S.placeQty=null; render();
+    }
+    /* ---------- F10: no valid bin → park the plate to overflow / staging (legitimate action, not stuck) ---------- */
+    function parkBlock(qty){
+      const dest=overflowLocFor(site());
+      return `<div class="panel" style="margin:8px 0;background:#fbf6e9;border-color:#e3d4a3">
+        <b style="color:#7a5a07">No bin fits this plate</b>
+        <div style="margin-top:4px;font-size:12.5px;color:#7a5a07">Every candidate is full, frozen or segregated. Park it to overflow / staging (${esc(locName(dest))}) so it stays visible and resumable, or scan a bin manually above.</div>
+        <button class="btn btn-outline" id="pa-park" style="width:100%;margin-top:8px">Park to overflow / staging →</button></div>`;
+    }
+    function parkLpn(){
+      const l=DB.lpns.find(x=>x.id===S.lpnId); if(!l){ S.view='list'; return render(); }
+      if (l.status!=='to-putaway') return flash(`${l.id} is no longer awaiting putaway.`);
+      const dest=parkToOverflow(l.id, { user:PWA.user });
+      if (!dest) return flash('Could not park — plate no longer awaiting putaway, or already in overflow.');
+      PWA.save();
+      S.banner=`${l.id} parked to ${locName(dest)} — no bin fit it. Still to put away; reappears on the worklist once space frees up.`;
+      S.view='list'; S.lpnId=null; S.bin=null; S.placeQty=null; S.rejectOpen=false; render();
+    }
+
+    /* ---------- MIXED PALLET decomposition (place each line → child LPN) ---------- */
+    function openPallet(id){ const p=palletById(id); S.view='pallet'; S.palletId=id; S.lineIdx=p?p.lines.findIndex(l=>(l.qty||0)>0):0; S.bin=null; S.rejectOpen=false; S.placeQty=(p&&p.lines[S.lineIdx])?p.lines[S.lineIdx].qty:1; render(); }
+    function renderPallet(){
+      const p=palletById(S.palletId); if(!p || p.status!=='to-putaway'){ S.view='list'; S.palletId=null; return render(); }
+      // what's already been placed from this pallet (by product → qty + bin), for the read-only progress
+      const placements = putawaysFromSource(p.id);
+      const placedByProd = {};
+      placements.forEach(t=>{ const e=placedByProd[t.product]||(placedByProd[t.product]={qty:0,bins:[]});
+        e.qty+=(t.qty||0); const bn=locName(t.to); if(e.bins.indexOf(bn)<0) e.bins.push(bn); });
+      const manifest = p.lines.map((ln,i)=>{
+        const placed=!(ln.qty>0), curln=i===S.lineIdx && !placed, open=!placed && !curln, e=placedByProd[ln.product];
+        const sub = placed
+          ? `placed ✓${e&&e.bins.length?' → '+esc(e.bins.join(', ')):''}`
+          : `${ln.qty} ${esc(uomOf(ln.product))}${e?` left · ${e.qty} placed`:''}`;
+        return `<div class="task"${open?` data-line="${i}"`:''} style="${curln?'border-color:#2f6fed;background:#eef4ff':(placed?'opacity:.6':'cursor:pointer')}">
+          <span class="meta"><b>${esc(prodName(ln.product))}</b>
+            <small>${sub}</small></span>
+          ${placed?'<span class="badge b-available">✓</span>':(curln?'<span class="badge b-toputaway">now</span>':'<span class="badge b-toputaway">place</span>')}</div>`;
+      }).join('');
+      const placedLines = p.lines.length - palletOpenLines(p).length;
+      const ln=p.lines[S.lineIdx];
+      if (S.placeQty==null || S.placeQty>ln.qty || S.placeQty<1) S.placeQty=ln.qty;
+      const q=S.placeQty, split=q<ln.qty;
+      const lnExpired = tracksExpiry(ln.product) && isExpired(ln);   // F9: expired line cannot store to 'available'
+      if (lnExpired) S.rejectOpen = true;                            // force the reject path open
+      const ranked=rankBins(ln.product,p.client,q,site());
+      if (S.bin==null) S.bin = ranked.valid[0] ? ranked.valid[0].loc.id : null;
+      root.innerHTML = `
+        <div class="panel" style="margin-bottom:10px"><b class="mono">${esc(p.id)}</b> <span class="badge b-toputaway">mixed pallet</span>${placedLines?' <span class="badge b-toputaway">partial</span>':''}
+          <div class="muted" style="margin-top:4px">${palletOpenLines(p).length} of ${p.lines.length} product(s) left${placedLines?` · ${placedLines} placed`:''} · from ${esc(locName(p.loc))}</div></div>
+        <p class="scan-hint" style="text-align:left;margin-left:2px">Pallet contents — tap any product to place it (any order)${placements.length?' · placed lines show ✓ → bin':''}</p>${manifest}
+        <div class="panel" style="margin:10px 0"><b>Place now:</b> ${esc(prodName(ln.product))} — ${ln.qty} ${esc(uomOf(ln.product))}${ln.lot?' · lot '+esc(ln.lot):''}${ln.expiry?' · exp '+esc(ln.expiry):''}</div>
+        ${lnExpired?`<div class="panel" style="margin:8px 0;background:#f8eeee;border-color:#c47e7e">
+          <b style="color:#8a2020">⛔ Expired line — cannot put away to available</b>
+          <div style="margin-top:4px;font-size:12.5px;color:#6b1f1f">Expired ${esc(ln.expiry||'')} (today ${esc(WMS_TODAY)}). Store / confirm is blocked. Route this product to <b>Quarantine</b> or <b>Damaged</b> using <b>Report damage / reject</b> below.</div></div>`:''}
+        <button class="btn btn-outline" id="pa-reject-toggle" style="width:100%"${lnExpired?' disabled':''}>${S.rejectOpen?'✕ Cancel reject':'⚠ Report damage / reject this product'}</button>
+        ${S.rejectOpen?`<div class="panel" style="margin:8px 0;background:#fbf6e9;border-color:#e3d4a3">
+          <div class="muted" style="font-size:12px;margin-bottom:8px">${lnExpired?'Expired stock — route every unit of this product to a blocked disposition (it never becomes available).':`Peel damaged units of <b>${esc(prodName(ln.product))}</b> off this pallet line — they route to a blocked disposition (excluded from available stock); the good remainder stays to put away.`}</div>
+          <label class="field"><span>Quantity to reject (of ${ln.qty})</span>
+            <input id="rej-qty" type="number" min="1" max="${ln.qty}" step="1"${lnExpired?` value="${ln.qty}"`:''}></label>
+          <label class="field"><span>Disposition <span class="req">*</span></span>
+            <select id="rej-disp"><option value="quarantine">Quarantine (QA)</option><option value="hold">Hold</option><option value="damaged">Damaged</option></select></label>
+          <label class="field"><span>Reason <span class="req">*</span></span>
+            <select id="rej-reason"><option value="">— select —</option></select></label>
+          <button class="btn btn-primary" id="rej-confirm" style="width:100%">Reject units</button></div>`:''}
+        ${lnExpired?'':`<label class="field"><span>Quantity to place into this bin</span>
+          <input id="pa-qty" type="number" min="1" max="${ln.qty}" step="1" value="${q}"></label>
+        <div class="muted" style="margin:-4px 0 10px">${split?`Split — <b>${q}</b> here; <b>${ln.qty-q}</b> stays on the pallet line.`:`Whole line (<b>${ln.qty}</b> ${esc(uomOf(ln.product))}).`}</div>
+        ${placeBlock(ranked)}
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="pa-confirm" style="width:100%"${S.bin?'':' disabled'}>Place ${q} ${esc(prodName(ln.product))}${S.bin?' → '+esc(locName(S.bin)):''}</button>`}
+        <button class="btn btn-outline" id="pa-back" style="width:100%">‹ Back to worklist</button>`;
+      // tap a different (open) product → switch the active line; place in any order
+      root.querySelectorAll('[data-line]').forEach(el=>el.onclick=()=>{ S.lineIdx=+el.dataset.line; S.bin=null; S.placeQty=null; S.rejectOpen=false; render(); });
+      if (!lnExpired){
+        wirePlace();
+        const qi=$('pa-qty'); if(qi) qi.onchange=()=>{ let v=Math.floor(Number(qi.value)||0); if(v<1)v=1; if(v>ln.qty)v=ln.qty; S.placeQty=v; S.bin=null; render(); };
+        const cf=$('pa-confirm'); if(cf) cf.onclick=confirmPalletLine;
+      }
+      $('pa-back').onclick=()=>{ S.view='list'; S.palletId=null; S.bin=null; S.placeQty=null; S.rejectOpen=false; render(); };
+      const rt=$('pa-reject-toggle'); if(rt && !lnExpired) rt.onclick=()=>{ S.rejectOpen=!S.rejectOpen; render(); };
+      if (S.rejectOpen){   // F12: per-line damage reject
+        fillRejReasons(false);
+        const rd=$('rej-disp'); if(rd) rd.onchange=()=>fillRejReasons(true);
+        const rc=$('rej-confirm'); if(rc) rc.onclick=confirmPalletReject;
+      }
+    }
+    // F12: peel damaged/expired units off the ACTIVE pallet line → blocked disposition; good remainder keeps flowing.
+    function confirmPalletReject(){
+      const p=palletById(S.palletId); if(!p){ S.view='list'; return render(); }
+      const ln=p.lines[S.lineIdx]; if(!ln || !(ln.qty>0)) return flash('That product line is no longer open.');
+      let q=Math.floor(Number($('rej-qty').value)||0);
+      if (q<1) return flash('Enter how many units to reject.');
+      if (q>ln.qty) q=ln.qty;
+      const disp=$('rej-disp').value, reason=$('rej-reason').value;
+      if (!reason) return flash('A reason is required to reject units.');
+      const u=uomOf(ln.product), nm=prodName(ln.product);
+      const res=palletLineReject(p.id, S.lineIdx, q, { disposition:disp, reason, user:PWA.user });
+      if (!res) return flash('Could not reject — that pallet line is no longer open.');
+      PWA.save();
+      const rp=lpnById(res.rejectedId);
+      const where = disp==='hold' ? 'Hold' : `${disp==='damaged'?'Damaged':'Quarantine'} (${locName(rp?rp.loc:'')})`;
+      S.rejectOpen=false; S.bin=null; S.placeQty=null;
+      if (res.remaining===0){                            // line fully rejected → advance (or finish pallet)
+        const advanced=nextPalletStep(p);               // false → pallet finished (its own banner already shown on the list)
+        if (advanced) ok(`${res.rejected} ${u} of ${nm} rejected → ${where} as ${res.rejectedId} (${reason}). Next product is up.`);
+        return;
+      }
+      render();                                          // remainder stays on the line to place
+      ok(`${res.rejected} ${u} of ${nm} rejected → ${where} as ${res.rejectedId} (${reason}). ${res.remaining} ${u} left on this line to put away.`);
+    }
+    function confirmPalletLine(){
+      const p=palletById(S.palletId); if(!p){ S.view='list'; return render(); }
+      const ln=p.lines[S.lineIdx];
+      if(!ln || !(ln.qty>0)) return nextPalletStep(p);
+      if(!S.bin) return flash('Select or scan a destination bin.');
+      const binId=S.bin, q=Math.min(Math.max(1,Math.floor(S.placeQty)||0), ln.qty);
+      const v=validateBin(binId, ln.product, q, p.client); if(!v.ok) return flash(v.msg);
+      const newId=decomposePalletLine(p.id, S.lineIdx, binId, { qty:q, user:PWA.user, note:`Putaway (pallet ${p.id}) → ${locName(binId)}` });
+      PWA.save();
+      if (ln.qty>0){                                   // partial — remainder stays on this line
+        S.bin=null; S.placeQty=ln.qty; render();
+        ok(`${q} ${uomOf(ln.product)} of ${prodName(ln.product)} → ${locName(binId)} as ${newId}. ${ln.qty} left on this line.`);
+        return;
+      }
+      const advanced=nextPalletStep(p);                // line done → advance (or finish)
+      if (advanced) ok(`${prodName(ln.product)} → ${locName(binId)} as ${newId}.`);
+    }
+    function nextPalletStep(p){
+      const idx=p.lines.findIndex(l=>(l.qty||0)>0);
+      if(idx<0){ S.banner=`Pallet ${p.id} fully put away — every product is now live stock at its bin.`; S.view='list'; S.palletId=null; S.bin=null; S.placeQty=null; render(); return false; }
+      S.lineIdx=idx; S.bin=null; S.placeQty=p.lines[idx].qty; render(); return true;
+    }
+
+    /* ---------- dispatch ---------- */
+    function render(){
+      flashClear();
+      ({ list:renderList, lpn:renderLpn, pallet:renderPallet }[S.view] || renderList)();
+      if (S.view==='list' && S.banner){ ok(S.banner); S.banner=null; }
+    }
+    // optional deep links: ?lpn= / ?pallet=
+    const q=new URLSearchParams(location.search);
+    if (q.get('pallet') && palletById(q.get('pallet'))) openPallet(q.get('pallet'));
+    else if (q.get('lpn') && DB.lpns.find(l=>l.id===q.get('lpn'))) openLpn(q.get('lpn'));
+    else render();
+  })();
+  </script>
+</body>
+</html>

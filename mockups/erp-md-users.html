@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Users & Roles — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="md-users" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Master Data › Users & Roles">
+  <div id="page-content">
+    <div id="view-list">
+      <div class="page-head"><h1>Users &amp; Roles</h1>
+        <div class="acts"><button class="btn btn-outline" onclick="show('edit')">Create</button>
+          <button class="btn" disabled>Export</button><button class="btn" disabled>Deactivate</button></div></div>
+      <div class="tabs"><a href="#" class="active" onclick="return false">All</a>
+        <a href="#" onclick="return false">Administrators</a><a href="#" onclick="return false">Supervisors</a>
+        <a href="#" onclick="return false">Operators</a></div>
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>Name</span><input></label>
+          <label class="field"><span>Email</span><input></label>
+          <label class="field"><span>Role</span><select><option>Any</option><option>Administrator</option><option>Supervisor</option><option>Operator</option></select></label>
+          <label class="field"><span>Site scope</span><select><option>Any</option><option>All sites</option><option>Lyon DC</option><option>Paris Hub</option></select></label>
+        </div></div>
+      <div class="spacer"></div>
+      <div class="table-toolbar"><button class="btn btn-sm btn-outline">Excel</button>
+        <button class="btn btn-sm btn-outline">Excel+</button><span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>User</th><th><span class="funnel">▾</span>Email</th>
+          <th><span class="funnel">▾</span>Role</th><th><span class="funnel">▾</span>Site scope</th>
+          <th><span class="funnel">▾</span>Client scope</th><th><span class="funnel">▾</span>Status</th>
+        </tr></thead><tbody id="rows"></tbody></table></div>
+    </div>
+
+    <div id="view-edit" style="display:none">
+      <div class="page-head"><h1>Edit user</h1>
+        <div class="acts"><button class="btn btn-primary">Save user</button>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button></div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div class="panel">
+        <fieldset><legend>Account</legend>
+          <div class="field-row">
+            <label class="field"><span>Full name <span class="req">*</span></span><input value="Samer Merhi"></label>
+            <label class="field"><span>Email (login) <span class="req">*</span></span><input value="samer@op.example"></label>
+            <label class="field"><span>Status</span><select><option>Active</option><option>Inactive</option></select></label>
+          </div>
+        </fieldset>
+        <fieldset><legend>Role &amp; scope</legend>
+          <div class="field-row">
+            <label class="field"><span>Role <span class="req">*</span></span><select><option>Operator</option><option>Supervisor</option><option>Administrator</option></select></label>
+            <label class="field"><span>Site scope</span><select><option>Lyon DC</option><option>Paris Hub</option><option>All sites</option></select></label>
+            <label class="field"><span>Client scope</span><select><option>ACME Foods Ltd</option><option>Globex Pharma</option><option>All clients</option></select></label>
+          </div>
+          <p class="wf-note muted">Access is scoped by site and/or client — the user only sees records within scope.</p>
+        </fieldset>
+        <fieldset><legend>Permissions by role (reference)</legend>
+          <table class="wf"><thead><tr><th>Capability</th><th>Operator</th><th>Supervisor</th><th>Administrator</th></tr></thead>
+            <tbody>
+              <tr><td>Scan receive / putaway / pick / move / count</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Approve counts &amp; adjustments</td><td>—</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Freeze / reconcile physical inventory</td><td>—</td><td>✓</td><td>✓</td></tr>
+              <tr><td>Edit master data (products, locations, UoM)</td><td>—</td><td>—</td><td>✓</td></tr>
+              <tr><td>Manage users &amp; roles</td><td>—</td><td>—</td><td>✓</td></tr>
+            </tbody></table>
+        </fieldset>
+        <div id="e-notes" style="margin:10px 0"></div>
+      </div>
+    </div>
+  </div>
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    document.getElementById('e-notes').innerHTML = noteField({ ref: (DB.users[0]||{}).id || 'U-DRAFT', level:'header', title:'Notes (optional)' });
+    document.getElementById('rows').innerHTML=DB.users.map(u=>`
+      <tr><td><input type="checkbox" style="width:auto"></td><td class="dots">⋮</td>
+        <td><a href="#" onclick="show('edit');return false">${u.name}</a></td>
+        <td class="muted">${u.email}</td><td>${u.role}</td><td>${u.sites}</td><td>${u.clients}</td>
+        <td><span class="badge ${u.status==='active'?'b-available':''}">${u.status}</span></td></tr>`).join('');
+    function show(v){document.getElementById('view-list').style.display=v==='list'?'':'none';
+      document.getElementById('view-edit').style.display=v==='edit'?'':'none';window.scrollTo(0,0);}
+    function toggleFilter(b){const f=document.getElementById('filters');const h=f.style.display==='none';
+      f.style.display=h?'':'none';b.textContent=h?'Hide filter':'Show filter';}
+  </script>
+</body></html>

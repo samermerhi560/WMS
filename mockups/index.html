@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WMS Mockups — Sitemap</title>
+  <link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body>
+  <div class="map-wrap">
+    <h1>WMS Mockups — Sitemap</h1>
+    <p class="sub">3PL / customer-owned-stock warehouse system · clean wireframes (CSS re-skinned later) · click-through prototype.</p>
+    <p class="legend">Black links are built. <span class="muted">Grey “not built yet”</span> links are the remaining screens to clone — they’ll come online section by section. ERP = desktop back-office · PWA = phone scanner.</p>
+
+    <div class="map-grid">
+
+      <div class="map-card">
+        <h2>0 · Foundation</h2>
+        <ul>
+          <li><a href="erp-dashboard.html">ERP Dashboard (landing)</a></li>
+          <li><a href="pwa-home.html">PWA Task Hub (scanner landing)</a></li>
+        </ul>
+      </div>
+
+      <div class="map-card">
+        <h2>1 · Master Data</h2>
+        <div class="chan">ERP</div>
+        <ul>
+          <li><a href="erp-md-clients.html">Clients</a></li>
+          <li><a href="erp-md-consignees.html">Consignees (ship-to)</a></li>
+          <li><a href="erp-md-sites.html">Sites</a></li>
+          <li><a href="erp-md-locations.html">Locations (zone&rarr;aisle&rarr;rack&rarr;bin)</a></li>
+          <li><a href="erp-md-products.html">Products (+ barcodes, packaging tabs)</a></li>
+          <li><a href="erp-md-partners.html">Suppliers &amp; Carriers</a></li>
+          <li><a href="erp-md-reasons.html">Reason Codes (status / adjust / correct / return)</a></li>
+          <li><a href="erp-md-uom.html">UoM / Packaging</a></li>
+          <li><a href="erp-md-users.html">Users &amp; Roles</a></li>
+          <li><a href="erp-md-clientmap.html">Client&ndash;User Mapping</a></li>
+          <li><a href="erp-md-import.html">CSV Import</a></li>
+        </ul>
+        <div class="chan">PWA</div>
+        <ul>
+          <li><a href="pwa-md-lookup-loc.html">Location lookup (scan)</a></li>
+          <li><a href="pwa-md-lookup-prod.html">Product lookup (scan)</a></li>
+        </ul>
+      </div>
+
+      <div class="map-card">
+        <h2>2 · Goods Reception</h2>
+        <div class="chan">ERP</div>
+        <ul>
+          <li><a href="erp-gr-asn.html">ASN list + create/edit</a></li>
+          <li><a href="erp-gr-receipt.html">Receive (split · mixed pallet · labels)</a></li>
+          <li><a href="erp-gr-inspect.html">Inspection + photo</a></li>
+          <li><a href="erp-gr-grn.html">GRN view/print</a></li>
+          <li><a href="erp-gr-labels.html">Labels / Reprint (LPN &amp; pallet)</a></li>
+        </ul>
+        <div class="chan">PWA</div>
+        <ul>
+          <li><a href="pwa-gr-receive.html">Receive (scan · split · mixed pallet)</a></li>
+          <li><a href="pwa-gr-inspect.html">Inspection pass/fail + photo</a></li>
+          <li><a href="pwa-gr-lpn.html">LPN / pallet label print</a></li>
+          <li><a href="pwa-gr-reprint.html">Reprint label (LPN / pallet)</a></li>
+        </ul>
+      </div>
+
+      <div class="map-card">
+        <h2>3 · Putaway</h2>
+        <div class="chan">ERP</div>
+        <ul><li><a href="erp-pa-tasks.html">Putaway tasks + pallet decomposition</a></li></ul>
+        <div class="chan">PWA</div>
+        <ul><li><a href="pwa-pa-putaway.html">Putaway (scan LPN / pallet → location)</a></li></ul>
+      </div>
+
+      <div class="map-card">
+        <h2>4 · Stock-Out</h2>
+        <div class="chan">ERP</div>
+        <ul>
+          <li><a href="erp-so-orders.html">Outbound orders + create</a></li>
+          <li><a href="erp-so-alloc.html">Allocation (FEFO / FIFO)</a></li>
+          <li><a href="erp-so-dispatch.html">Pick / dispatch confirm</a></li>
+          <li><a href="erp-so-fulfil.html">Express fulfil (one-pass)</a></li>
+          <li><a href="erp-so-note.html">Delivery note</a></li>
+        </ul>
+        <div class="chan">PWA</div>
+        <ul>
+          <li><a href="pwa-so-pick.html">Pick / Dispatch (scan → pick → load → issue + delivery note)</a></li>
+          <li><a href="pwa-so-dispatch.html">Ad-hoc dispatch (emergency outbound — inline order + governance + delivery note)</a></li>
+        </ul>
+      </div>
+
+      <div class="map-card">
+        <h2>5 · Inventory Operations</h2>
+        <div class="chan">ERP</div>
+        <ul>
+          <li><a href="erp-inv-status.html">Stock status (block / release)</a></li>
+          <li><a href="erp-inv-adjust.html">Adjustments &amp; Corrections (qty + attributes)</a></li>
+          <li><a href="erp-inv-transfer.html">Transfers (move + inter-site)</a></li>
+          <li><a href="erp-inv-count.html">Count variance approval</a></li>
+          <li><a href="erp-inv-physical.html">Physical inventory (freeze/reconcile)</a></li>
+          <li><a href="erp-inv-repack.html">Repack / Split / Merge / Re-kit</a></li>
+          <li><a href="erp-inv-returns.html">Returns / put-back</a></li>
+        </ul>
+        <div class="chan">PWA</div>
+        <ul>
+          <li><a href="pwa-inv-move.html">Move (scan LPN → destination; partial split)</a></li>
+          <li><a href="pwa-inv-count.html">Count (scan location → counts → pending approval)</a></li>
+          <li><a href="pwa-inv-transfer.html">Transfers (inter-site ship / receive)</a></li>
+          <li><a href="pwa-inv-physical.html">Physical inventory (freeze → count → post)</a></li>
+          <li><a href="pwa-inv-repack.html">Repack / Split / Merge / Re-kit</a></li>
+          <li><a href="pwa-inv-returns.html">Returns / Put-back (disposition)</a></li>
+        </ul>
+      </div>
+
+      <div class="map-card">
+        <h2>6 · Reports &amp; Visibility</h2>
+        <div class="chan">ERP</div>
+        <ul>
+          <li><a href="erp-rpt-soh.html">Stock on hand</a></li>
+          <li><a href="erp-rpt-txns.html">Transaction history / ledger</a></li>
+          <li><a href="erp-rpt-expiry.html">Expiry &amp; aging</a></li>
+          <li><a href="erp-rpt-inbound.html">Inbound / receipts</a></li>
+          <li><a href="erp-rpt-outbound.html">Outbound / shipments</a></li>
+          <li><a href="erp-rpt-variance.html">Adjustments &amp; variances</a></li>
+          <li><a href="erp-rpt-utilization.html">Bin / location utilization</a></li>
+          <li><a href="erp-rpt-trace.html">Lot / serial traceability</a></li>
+          <li><a href="erp-rpt-stockcard.html">Stock card / product ledger</a></li>
+          <li><a href="erp-rpt-statement.html">Client stock statement</a></li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

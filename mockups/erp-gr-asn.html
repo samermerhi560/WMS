@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inbound / ASN — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="gr-asn" data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Goods Reception › Inbound / ASN">
+  <div id="page-content">
+
+    <!-- screen-local styling MUST live inside #page-content (shell rebuilds body from it only) -->
+    <style>
+      .wms-modal { position:fixed; inset:0; background:rgba(20,28,40,.45);
+        display:flex; align-items:flex-start; justify-content:center; padding:48px 16px; z-index:50; }
+      .wms-dialog { background:var(--white); border-radius:var(--radius); width:560px; max-width:100%;
+        box-shadow:0 12px 40px rgba(0,0,0,.25); display:flex; flex-direction:column; max-height:86vh; }
+      .wms-dialog-head { display:flex; align-items:center; padding:14px 16px; border-bottom:1px solid var(--line-soft); }
+      .wms-dialog-head .wms-x { margin-left:auto; cursor:pointer; color:var(--ink-faint); }
+      .wms-dialog-body { padding:16px; overflow:auto; }
+      .wms-dialog-foot { display:flex; gap:8px; justify-content:flex-end; padding:12px 16px; border-top:1px solid var(--line-soft); flex-wrap:wrap; }
+      .erp-main .wms-dialog .btn { text-transform:uppercase; }
+      .refuse-warn { background:#fdecea; border-left:3px solid var(--bad); padding:10px 14px;
+        font-size:12.5px; color:#7a1f1f; border-radius:0 var(--radius) var(--radius) 0; margin-bottom:14px; }
+    </style>
+
+    <!-- LIST -->
+    <div id="view-list">
+      <div class="page-head"><h1>Inbound Orders / ASN</h1>
+        <div class="acts">
+          <button class="btn btn-outline" onclick="openAsn()">Create</button>
+          <button class="btn" disabled>Export</button>
+        </div></div>
+      <div class="tabs">
+        <a href="#" class="active" onclick="asnFilter('all',this);return false">All</a>
+        <a href="#" onclick="asnFilter('open',this);return false">Open</a>
+        <a href="#" onclick="asnFilter('partial',this);return false">Partial</a>
+        <a href="#" onclick="asnFilter('closed',this);return false">Closed</a>
+        <a href="#" onclick="asnFilter('cancelled',this);return false">Cancelled</a>
+        <a href="#" onclick="asnFilter('refused',this);return false">Refused</a></div>
+      <div class="panel">
+        <div class="filter-head"><span class="ttl">Filters</span>
+          <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+        <div class="filter-grid" id="filters">
+          <label class="field"><span>ASN reference</span><input></label>
+          <label class="field"><span>Client</span><select><option>All clients</option><option>ACME Foods Ltd</option><option>Globex Pharma</option></select></label>
+          <label class="field"><span>Site</span><select><option>All sites</option><option>Lyon DC</option><option>Paris Hub</option></select></label>
+          <label class="field"><span>Status</span><select><option>Any</option><option>Open</option><option>Partial</option><option>Closed</option></select></label>
+          <label class="field"><span>Assignee</span><select id="f-assignee"></select></label>
+          <label class="field"><span>Expected from</span><input type="date"></label>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <div class="table-toolbar">
+        <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+        <button class="btn btn-sm" disabled>Columns</button><span class="chip">↑ Client <span class="x">✕</span></span>
+        <span class="refresh">⟳</span></div>
+      <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+        <table class="wf"><thead><tr>
+          <th style="width:30px"><input type="checkbox" style="width:auto"></th><th style="width:28px">⚙</th>
+          <th><span class="funnel">▾</span>ASN ref</th><th><span class="funnel">▾</span>Site</th>
+          <th><span class="funnel">▾</span>Supplier</th>
+          <th><span class="funnel">▾</span>Lines</th><th><span class="funnel">▾</span>Received / Expected</th>
+          <th><span class="funnel">▾</span>Status</th>
+          <th><span class="funnel">▾</span>Assignee</th><th></th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+    </div>
+
+    <!-- CREATE / EDIT -->
+    <div id="view-edit" style="display:none">
+      <div class="page-head"><h1 id="e-title">Create inbound order</h1>
+        <div class="acts">
+          <button class="btn btn-primary" onclick="saveAsn()">Save ASN</button>
+          <a class="btn btn-outline" id="e-receive" href="erp-gr-receipt.html">Receive</a>
+          <button class="btn btn-outline" onclick="show('list')">Cancel</button>
+        </div></div>
+      <div class="crumb"><a href="#" onclick="show('list');return false">‹ Back to list</a></div>
+      <div id="e-bc" style="margin-bottom:10px"></div>
+      <div id="e-photos" style="margin-bottom:10px"></div>
+      <div id="e-notes" style="margin-bottom:10px"></div>
+      <div class="panel">
+        <fieldset><legend>Header</legend>
+          <div class="field-row">
+            <label class="field"><span>ASN reference</span><input id="e-ref" placeholder="auto if blank"></label>
+            <label class="field"><span>Client <span class="req">*</span></span><select id="e-client" onchange="renderLineOptions()"><option value="C-ACME">ACME Foods Ltd</option><option value="C-GLBX">Globex Pharma</option></select></label>
+            <label class="field"><span>Site <span class="req">*</span></span><select><option>Lyon DC</option><option>Paris Hub</option></select></label>
+            <label class="field"><span>Supplier</span><select id="e-supplier"></select></label>
+            <label class="field"><span>Expected date</span><input type="date"></label>
+            <label class="field"><span>Assignee <span class="muted">· dispatch to (optional)</span></span><select id="e-assignee"></select></label>
+          </div>
+        </fieldset>
+        <fieldset><legend>Expected lines</legend>
+          <table class="wf"><thead><tr><th>Product</th><th>Expected qty</th><th>Unit</th><th>Photos</th><th>Notes</th><th></th></tr></thead>
+            <tbody id="line-rows"></tbody></table>
+          <div class="spacer"></div><button class="btn btn-sm btn-outline" onclick="addLine()">Add line</button>
+          <p class="wf-note muted">Lines are the <b>expected</b> goods. Actual receipt (qty, lot, expiry, serial, LPN) is captured on the
+            <a href="erp-gr-receipt.html">Receive</a> screen or via the PWA scanner — including new products created inline.</p>
+        </fieldset>
+      </div>
+    </div>
+
+    <!-- ===== REFUSE DELIVERY MODAL (inside #page-content) ===== -->
+    <div class="wms-modal" id="refuse-modal" style="display:none">
+      <div class="wms-dialog">
+        <div class="wms-dialog-head"><b>⛔ Refuse delivery</b><span class="wms-x" onclick="closeRefuse()">✕</span></div>
+        <div class="wms-dialog-body">
+          <div class="refuse-warn">The goods are <b>kept OUTSIDE the warehouse</b> and handed back to the carrier.
+            Refusing records the reason and marks the ASN <b>refused</b> — <b>no stock is created</b>.</div>
+          <p class="muted" id="refuse-ctx" style="margin-top:0"></p>
+          <label class="field"><span>Reason <span class="req">*</span></span><select id="refuse-reason"></select></label>
+          <div class="field-row">
+            <label class="field"><span>Supplier</span><select id="refuse-supplier"></select></label>
+            <label class="field"><span>Carrier (returned to)</span><select id="refuse-carrier"></select></label>
+          </div>
+          <label class="field"><span>Note (optional)</span><input id="refuse-note" placeholder="Seal no., temperature reading, who was notified…"></label>
+        </div>
+        <div class="wms-dialog-foot">
+          <button class="btn btn-outline" onclick="closeRefuse()">CANCEL</button>
+          <button class="btn btn-primary" id="refuse-confirm">CONFIRM REFUSAL</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== CANCEL / VOID MODAL (inside #page-content) ===== -->
+    <div class="wms-modal" id="cancel-modal" style="display:none">
+      <div class="wms-dialog">
+        <div class="wms-dialog-head"><b>Cancel / void ASN</b><span class="wms-x" onclick="closeCancel()">✕</span></div>
+        <div class="wms-dialog-body">
+          <p class="muted" id="cancel-ctx" style="margin-top:0"></p>
+          <label class="field"><span>Reason <span class="req">*</span></span><select id="cancel-reason"></select></label>
+          <label class="field"><span>Note (optional)</span><input id="cancel-note" placeholder="Why is this ASN being voided?"></label>
+        </div>
+        <div class="wms-dialog-foot">
+          <button class="btn btn-outline" onclick="closeCancel()">KEEP ASN</button>
+          <button class="btn btn-primary" id="cancel-confirm">VOID ASN</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/photos.js"></script><script src="assets/notes.js"></script><script src="assets/barcode.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    function asnUnits(a){ return a.lines.reduce((s,l)=>s+l.qty,0); }
+    let asnTab = 'all';
+    const state = { assignee:'all' };
+    function asnFilter(s, el){
+      asnTab = s;
+      document.querySelectorAll('.tabs a').forEach(a=>a.classList.remove('active'));
+      el.classList.add('active');
+      renderList();
+    }
+    function renderList(){
+      const list = DB.asns.filter(a => (asnTab === 'all' ? true : asnStatus(a) === asnTab) && assigneeFilterPass(a, state.assignee));
+      document.getElementById('rows').innerHTML = list.length ? list.map(a=>{
+        const t = asnTotals(a);
+        const st = asnStatus(a);
+        const live = st!=='cancelled' && st!=='refused';   // open/partial/closed are still "live"
+        const actionable = st==='open' || st==='partial';   // can still receive / refuse / void
+        const acts = live ? (
+            `<a href="erp-gr-receipt.html?asn=${a.id}">Receive ›</a>`
+            + (actionable ? ` &nbsp;·&nbsp; <a href="#" onclick="openRefuse('${a.id}');return false">Refuse</a>`
+                          + ` &nbsp;·&nbsp; <a href="#" onclick="openCancel('${a.id}');return false">Void</a>` : '')
+          ) : '<span class="muted">—</span>';
+        return `
+        <tr><td><input type="checkbox" style="width:auto"></td><td class="dots">⋮</td>
+          <td class="mono"><a href="#" onclick="openAsn('${a.id}');return false">${a.id}</a>${docCaseNote(a.lines)?`<div style="font-size:11px;color:#1d4ed8;font-weight:600;margin-top:2px">${docCaseNote(a.lines)}</div>`:''}</td>
+          <td>${dbName('sites',a.site)}</td>
+          <td>${a.supplier?dbName('suppliers',a.supplier):'<span class="muted">—</span>'}</td>
+          <td>${a.lines.length}</td><td>${t.rec} / ${t.exp}</td>
+          <td>${statusBadge(st)}</td>
+          <td>${a.assignee ? `<span class="tag tag-rule" title="Dispatched to this person">${esc(assigneeName(a.assignee))}${isMine(a)?' · <b>me</b>':''}</span>` : '<span class="muted">Any</span>'}</td>
+          <td>${acts}</td></tr>`;
+      }).join('') : `<tr><td colspan="10" class="muted" style="padding:18px">No ASNs in this view.</td></tr>`;
+    }
+    document.getElementById('f-assignee').innerHTML = assigneeFilterOptions('', state.assignee);
+    document.getElementById('f-assignee').addEventListener('change', e=>{ state.assignee=e.target.value; renderList(); });
+    renderList();
+    document.getElementById('e-supplier').innerHTML = `<option value="">— select supplier —</option>`+DB.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+
+    /* ---------- refuse delivery (F4) — records refusal, marks ASN refused, mints NO stock ---------- */
+    let refuseId = null, cancelId = null;
+    function openRefuse(id){
+      const a = DB.asns.find(x=>x.id===id); if(!a) return;
+      refuseId = id;
+      document.getElementById('refuse-ctx').innerHTML =
+        `<b>${a.id}</b> · ${dbName('clients',a.client)} · ${dbName('sites',a.site)} · ${a.lines.length} expected line(s).`;
+      document.getElementById('refuse-reason').innerHTML =
+        `<option value="">— select reason —</option>` + reasonsFor('refuse').map(r=>`<option>${r}</option>`).join('');
+      document.getElementById('refuse-supplier').innerHTML =
+        `<option value="">— none —</option>` + DB.suppliers.map(s=>`<option value="${s.id}"${s.id===a.supplier?' selected':''}>${s.name}</option>`).join('');
+      document.getElementById('refuse-carrier').innerHTML =
+        `<option value="">— none —</option>` + (DB.carriers||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+      document.getElementById('refuse-note').value = '';
+      document.getElementById('refuse-modal').style.display = 'flex';
+    }
+    function closeRefuse(){ document.getElementById('refuse-modal').style.display='none'; refuseId=null; }
+    document.getElementById('refuse-confirm').onclick = function(){
+      const a = DB.asns.find(x=>x.id===refuseId); if(!a) return;
+      const reason = document.getElementById('refuse-reason').value;
+      if(!reason){ alert('Select a refusal reason.'); return; }
+      refuseDelivery({ asn:a.id, client:a.client, site:a.site,
+        supplier:document.getElementById('refuse-supplier').value || a.supplier,
+        carrier:document.getElementById('refuse-carrier').value,
+        reason, note:document.getElementById('refuse-note').value });
+      closeRefuse();
+      alert(`${a.id} refused — goods kept OUTSIDE the warehouse. No stock was created.`);
+      renderList();
+    };
+
+    /* ---------- cancel / void ASN (F4) ---------- */
+    const VOID_REASONS = ['Ordered in error','Duplicate ASN','Cancelled by client','Supplier cancelled shipment','Superseded by new ASN','Other'];
+    function openCancel(id){
+      const a = DB.asns.find(x=>x.id===id); if(!a) return;
+      cancelId = id;
+      document.getElementById('cancel-ctx').innerHTML =
+        `Void <b>${a.id}</b> (${dbName('clients',a.client)})? It will be marked <b>cancelled</b> and removed from the active queue.`;
+      document.getElementById('cancel-reason').innerHTML =
+        `<option value="">— select reason —</option>` + VOID_REASONS.map(r=>`<option>${r}</option>`).join('');
+      document.getElementById('cancel-note').value = '';
+      document.getElementById('cancel-modal').style.display = 'flex';
+    }
+    function closeCancel(){ document.getElementById('cancel-modal').style.display='none'; cancelId=null; }
+    document.getElementById('cancel-confirm').onclick = function(){
+      const a = DB.asns.find(x=>x.id===cancelId); if(!a) return;
+      const reason = document.getElementById('cancel-reason').value;
+      if(!reason){ alert('Select a void reason.'); return; }
+      cancelAsn(a.id, { reason, note:document.getElementById('cancel-note').value });
+      closeCancel();
+      alert(`${a.id} cancelled / voided.`);
+      renderList();
+    };
+    // click-on-backdrop to dismiss
+    document.querySelectorAll('.wms-modal').forEach(m => m.addEventListener('click', e => { if(e.target===m) m.style.display='none'; }));
+
+    let curAsnRef = 'ASN-DRAFT';   // stable doc id for header/line photo refs in the open editor
+    let curAsn = null;             // the saved ASN object open in the editor (enables assignee persistence)
+    function lineRow(prodId, qty, idx){
+      const cid=document.getElementById('e-client').value;
+      const opts=DB.products.filter(p=>p.client===cid)
+        .map(p=>`<option value="${p.id}" ${p.id===prodId?'selected':''}>${p.name} (${p.sku})</option>`).join('');
+      const unit=(DB.products.find(p=>p.id===prodId)||{}).uom||'each';
+      const li = idx==null ? document.querySelectorAll('#line-rows tr').length : idx;
+      return `<tr>
+        <td><select>${opts}</select></td>
+        <td><input type="number" value="${qty||''}" style="max-width:120px"></td>
+        <td>${unit}</td>
+        <td>${photoField({ ref:`${curAsnRef}:L${li}`, level:'line', title:'Line photos' })}</td>
+        <td>${noteField({ ref:`${curAsnRef}:L${li}`, level:'line', title:'Line note' })}</td>
+        <td><a href="#" onclick="this.closest('tr').remove();return false">Remove</a></td></tr>`;
+    }
+    function renderLines(lines){
+      document.getElementById('line-rows').innerHTML =
+        (lines&&lines.length?lines:[{}]).map((l,i)=>lineRow(l.product,l.qty,i)).join('');
+    }
+    function renderLineOptions(){ renderLines([{}]); }   // client changed -> reset lines
+    function addLine(){ document.getElementById('line-rows').insertAdjacentHTML('beforeend', lineRow()); }
+
+    function openAsn(id){
+      const a=id?DB.asns.find(x=>x.id===id):null;
+      curAsn = a;
+      curAsnRef = a ? a.id : 'ASN-DRAFT';
+      document.getElementById('e-title').textContent = a?('Edit '+a.id):'Create inbound order';
+      document.getElementById('e-ref').value = a?a.id:'';
+      document.getElementById('e-client').value = a?a.client:'C-ACME';
+      const sup=document.getElementById('e-supplier'); sup.value = a?(a.supplier||''):''; if(sup._ssSync)sup._ssSync();
+      document.getElementById('e-assignee').innerHTML = assigneePickerOptions(a?a.site:'', a?a.assignee:'');
+      document.getElementById('e-receive').href = a ? ('erp-gr-receipt.html?asn='+a.id) : 'erp-gr-receipt.html';
+      document.getElementById('e-photos').innerHTML = photoField({ ref: curAsnRef, level:'header', title:'ASN / delivery photos (optional)' });
+      document.getElementById('e-notes').innerHTML = noteField({ ref: curAsnRef, level:'header', title:'ASN notes (optional)' });
+      // scannable ASN barcode (Code 128) — the PWA scans it to start Receive
+      const bc = document.getElementById('e-bc');
+      bc.innerHTML = a ? `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">${barcodeSVG(a.id,{height:40,module:1.5,font:10})}<button class="btn btn-sm btn-outline" onclick="printAsnLabel('${a.id}')">Print label</button></div>` : '';
+      renderLines(a?a.lines:[{}]);
+      show('edit');
+    }
+    function printAsnLabel(id){ const a=DB.asns.find(x=>x.id===id); if(!a) return;
+      printLabels([ labelHTML({ title:'INBOUND / ASN', code:a.id, lines:[
+        { k:'Client', v:dbName('clients',a.client) }, { k:'Site', v:dbName('sites',a.site) },
+        { k:'Lines', v:a.lines.length }, { k:'Scan to', v:'start Receive' } ]}) ], 'ASN label · '+a.id);
+    }
+    function saveAsn(){
+      // Dispatch: persist the assignee onto the live ASN so "My requests" reflects it this session.
+      const who = document.getElementById('e-assignee') ? document.getElementById('e-assignee').value : '';
+      if (curAsn) curAsn.assignee = who;
+      alert(`ASN ${curAsn?curAsn.id:'(auto)'} saved (mock)${who?' — dispatched to '+assigneeName(who):(curAsn?' — left unassigned':'')}.`);
+      renderList();
+      show('list');
+    }
+    function show(v){document.getElementById('view-list').style.display=v==='list'?'':'none';
+      document.getElementById('view-edit').style.display=v==='edit'?'':'none';window.scrollTo(0,0);}
+    function toggleFilter(b){const f=document.getElementById('filters');const h=f.style.display==='none';
+      f.style.display=h?'':'none';b.textContent=h?'Hide filter':'Show filter';}
+  </script>
+</body></html>

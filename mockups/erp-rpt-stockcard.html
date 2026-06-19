@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stock Card / Product Ledger — WMS</title><link rel="stylesheet" href="assets/wireframe.css">
+</head>
+<body data-erp-active="rpt-stockcard" data-erp-title="Reports"
+      data-erp-crumb="<a href='erp-dashboard.html'>Home</a> › Reports › Stock Card / Ledger">
+  <div id="page-content">
+    <style>
+      .tt { font-size:11px; padding:2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--fill); color:var(--ink-soft); white-space:nowrap; }
+      .tt.t-in   { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .tt.t-out  { border-color:#9a9a9a; background:#eee;    color:#444; }
+      .tt.t-int  { border-color:#7e9fc4; background:#e7eef6; color:#2c4a6b; }
+      .tt.t-adj  { border-color:#caa24a; background:#fbf3dd; color:#7a5a07; }
+      .dir { font-weight:700; }
+      .dir.in  { color:var(--ok); }
+      .dir.out { color:var(--bad); }
+      .dir.int { color:var(--ink-faint); }
+      table.wf tr.open td { background:var(--fill-2); font-weight:600; }
+      table.wf tr.now  td { background:var(--brand-tint); font-weight:600; }
+      .subj { display:flex; gap:26px; flex-wrap:wrap; font-size:13px; }
+      .subj b { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); font-weight:600; }
+      .flag { font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--line); margin-right:4px; }
+      .flag.on  { border-color:#6fae72; background:#e6f3e7; color:#235c25; }
+      .flag.off { color:var(--ink-faint); }
+      .lotpill { display:inline-block; font-size:12px; border:1px solid var(--line); border-radius:12px; padding:2px 9px; margin:0 6px 4px 0; background:var(--fill); }
+      .print-only.phead { margin-bottom:10px; }
+    </style>
+
+    <div class="print-only phead"><h1 id="p-title">Stock Card / Product Ledger</h1><div id="p-filters" class="muted"></div></div>
+
+    <div class="page-head"><h1>Stock Card <span class="muted" style="font-size:14px;font-weight:400">/ Product Ledger</span></h1>
+      <span class="muted" id="summary" style="align-self:center"></span>
+      <div class="acts">
+        <button class="btn btn-outline" onclick="window.print()">Print</button>
+        <button class="btn" disabled>Export</button>
+      </div>
+    </div>
+    <p class="sub">Complete audit ledger for a single product (and optionally one lot) — <b>every</b> movement in
+      chronological order: receive, putaway, move, transfer, status change (quarantine / hold / damaged / expired),
+      adjustment, count, repack, return and dispatch — each with a signed quantity and the <b>running on-hand
+      balance</b>. Reads the <code>DB.txns[]</code> audit log; the balance is anchored to live on-hand.</p>
+
+    <div class="panel no-print">
+      <div class="filter-head"><span class="ttl">Ledger parameters</span>
+        <span class="right"><button class="btn btn-sm" onclick="toggleFilter(this)">Hide filter</button></span></div>
+      <div class="filter-grid" id="filters">
+        <label class="field"><span>Product <span class="req">*</span></span><select id="f-product"></select></label>
+        <label class="field"><span>Lot / batch</span><select id="f-lot"></select></label>
+        <label class="field"><span>Site</span><select id="f-site"></select></label>
+        <label class="field"><span>Movement</span><select id="f-dir">
+          <option value="all">All movements</option>
+          <option value="in">Inbound (+) only</option>
+          <option value="out">Outbound (−) only</option>
+          <option value="internal">Internal only (move / putaway / status)</option>
+        </select></label>
+        <label class="field"><span>From date</span><input type="date" id="f-since"></label>
+        <label class="field"><span>To date</span><input type="date" id="f-until"></label>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel" id="subject" style="margin-bottom:14px"></div>
+
+    <div class="table-toolbar no-print">
+      <button class="btn btn-sm btn-outline">Excel</button><button class="btn btn-sm btn-outline">Excel+</button>
+      <button class="btn btn-sm btn-outline" onclick="window.print()">Print</button>
+      <span class="chip">↑ Oldest first <span class="x">✕</span></span>
+      <span class="refresh">⟳</span></div>
+    <div class="panel" style="padding:0;border-radius:0 0 var(--radius) var(--radius)">
+      <table class="wf"><thead><tr>
+        <th><span class="funnel">▾</span>When</th>
+        <th>Dir</th>
+        <th><span class="funnel">▾</span>Event</th>
+        <th><span class="funnel">▾</span>LPN</th>
+        <th><span class="funnel">▾</span>Lot</th>
+        <th class="num">Qty</th>
+        <th class="num">Balance</th>
+        <th>From → To</th>
+        <th>User</th>
+        <th>Ref / note</th>
+        <th>Notes</th>
+      </tr></thead><tbody id="rows"></tbody></table>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:8px">Inbound (+): receive / transfer-in / return. Outbound (−): dispatch / transfer-out. Internal (putaway / move / status change) doesn’t alter on-hand. Opening balance is derived so the ledger reconciles to current on-hand.</p>
+  </div>
+
+  <script src="assets/data.js"></script><script src="assets/notes.js"></script><script src="assets/erp-shell.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const dateOf = ts => String(ts||'').slice(0,10);
+    const IN_T  = ['receive','transfer-receive','return'];
+    const OUT_T = ['dispatch','transfer-ship'];
+    const ADJ_T = ['adjust','count','repack'];
+    // internal (no on-hand change): putaway, move, status, correct
+    function adjSign(note){ const n=String(note||'').toLowerCase();
+      if (/(decrease|write-off|loss|shrink|down|−|over-count)/.test(n)) return -1;
+      if (/(increase|found|up|under-count|gain)/.test(n)) return 1; return 0; }
+    function dirOf(t){ if (IN_T.includes(t.type)) return 'in'; if (OUT_T.includes(t.type)) return 'out';
+      if (ADJ_T.includes(t.type)) return 'adj'; return 'internal'; }
+    function deltaOf(t){
+      if (IN_T.includes(t.type))  return  (t.qty||0);
+      if (OUT_T.includes(t.type)) return -(t.qty||0);
+      if (ADJ_T.includes(t.type)) return adjSign(t.note)*(t.qty||0);
+      return 0;
+    }
+    function tcls(d){ return d==='in'?'t-in':d==='out'?'t-out':d==='adj'?'t-adj':'t-int'; }
+
+    const params = new URLSearchParams(location.search);
+    const state = {
+      product: params.get('product') || (DB.products[0]&&DB.products[0].id) || '',
+      lot: params.get('lot') || 'all',
+      site:'all', dir:'all', since:'', until:''
+    };
+
+    // LPNs of this product (+ lot/site scope) — includes qty 0 (dispatched/consumed) for full history.
+    function scopeLpns(){
+      return DB.lpns.filter(l=>l.product===state.product
+        && (state.lot==='all' || (l.lot||'')===state.lot)
+        && (state.site==='all' || l.site===state.site));
+    }
+    function currentOnHand(){ return scopeLpns().reduce((s,l)=>s+(l.qty||0),0); }
+
+    function ledgerTxns(){
+      const ids = new Set(scopeLpns().map(l=>l.id));
+      return (DB.txns||[]).filter(t=>{
+        if (t.product!==state.product) return false;
+        // restrict to plates in scope (handles lot/site narrowing); fall back to product match if lpn unknown
+        if (t.lpn && ids.size && !ids.has(t.lpn)) return false;
+        return true;
+      }).sort((a,b)=>String(a.ts).localeCompare(String(b.ts)));   // chronological for running balance
+    }
+
+    function render(){
+      const all = ledgerTxns();
+      // opening = currentOnHand − Σ all deltas (so the forward walk ends exactly at on-hand)
+      const onHand = currentOnHand();
+      const net = all.reduce((s,t)=>s+deltaOf(t),0);
+      let bal = onHand - net;
+      const opening = bal;
+
+      // build rows with running balance over the FULL set, then apply display filters (date/dir)
+      const built = all.map(t=>{ const d=dirOf(t), dl=deltaOf(t); bal+=dl; return {t,d,dl,bal}; });
+      const shown = built.filter(({t,d})=>{
+        const dd = dateOf(t.ts);
+        if (state.since && dd < state.since) return false;
+        if (state.until && dd > state.until) return false;
+        if (state.dir==='in'  && d!=='in')  return false;
+        if (state.dir==='out' && d!=='out') return false;
+        if (state.dir==='internal' && !['internal','adj'].includes(d)) return false;
+        return true;
+      });
+
+      const p = DB.products.find(x=>x.id===state.product)||{};
+      const uom = p.uom||'';
+      const noFilter = !state.since && !state.until && state.dir==='all';
+
+      let body = '';
+      if (noFilter) body += `<tr class="open"><td class="mono">—</td><td></td><td>Opening balance</td><td></td><td></td><td class="num">—</td><td class="num">${opening}</td><td></td><td></td><td class="muted">derived (period start)</td><td></td></tr>`;
+      body += shown.length ? shown.map(({t,d,dl,bal},i)=>{
+        const isLast = noFilter && i===shown.length-1;
+        return `<tr class="${isLast?'now':''}">
+          <td class="mono">${esc(t.ts)}</td>
+          <td><span class="dir ${d==='adj'?'int':d}">${d==='in'?'IN':d==='out'?'OUT':d==='adj'?'ADJ':'—'}</span></td>
+          <td><span class="tt ${tcls(d)}">${esc(t.type)}</span></td>
+          <td class="mono">${esc(t.lpn||'—')}</td>
+          <td class="mono">${esc((lpnById(t.lpn)||{}).lot||'—')}</td>
+          <td class="num">${dl>0?`<span class="pos">+${dl}</span>`:dl<0?`<span class="neg">${dl}</span>`:'<span class="muted">0</span>'}</td>
+          <td class="num"><b>${bal}</b></td>
+          <td class="mono">${esc(t.from?locName(t.from):'—')} → ${esc(t.to?locName(t.to):'—')}</td>
+          <td>${esc(t.user||'')}</td>
+          <td>${esc(t.ref||'')}${t.note?` <span class="muted">· ${esc(t.note)}</span>`:''}</td>
+          <td>${t.note || noteFor(t.id) || '<span class="muted">—</span>'}</td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="11" class="muted" style="padding:18px">No movements for this product${state.lot!=='all'?` / lot ${esc(state.lot)}`:''} in the selected range.</td></tr>`;
+      $('rows').innerHTML = body;
+
+      // subject header
+      const tr = p.track||{};
+      const byLot = {};
+      scopeLpns().filter(l=>(l.qty||0)>0).forEach(l=>{ byLot[l.lot||'(no lot)']=(byLot[l.lot||'(no lot)']||0)+l.qty; });
+      const lotPills = Object.keys(byLot).length
+        ? Object.entries(byLot).map(([lot,q])=>`<span class="lotpill"><b>${esc(lot)}</b> · ${q} ${esc(uom)}</span>`).join('')
+        : '<span class="muted">no stock on hand</span>';
+      $('subject').innerHTML = `<div class="subj" style="margin-bottom:10px">
+          <div><b>Product</b>${esc(prodName(state.product))}</div>
+          <div><b>Client</b>${esc(dbName('clients',p.client))}</div>
+          <div><b>Base unit</b>${esc(uom||'—')}</div>
+          <div><b>Tracking</b>
+            <span class="flag ${tr.lot?'on':'off'}">lot</span>
+            <span class="flag ${tr.expiry?'on':'off'}">expiry</span>
+            <span class="flag ${tr.serial?'on':'off'}">serial</span></div>
+          <div><b>On-hand ${state.lot!=='all'?'(lot '+esc(state.lot)+')':'(all lots)'}</b>${onHand} ${esc(uom)}</div>
+        </div>
+        <div><b style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft)">On-hand by lot</b><div style="margin-top:6px">${lotPills}</div></div>`;
+
+      // KPIs
+      const ins = all.filter(t=>dirOf(t)==='in').reduce((s,t)=>s+(t.qty||0),0);
+      const outs = all.filter(t=>dirOf(t)==='out').reduce((s,t)=>s+(t.qty||0),0);
+      const adjs = all.filter(t=>dirOf(t)==='adj').reduce((s,t)=>s+deltaOf(t),0);
+      $('kpis').innerHTML = `
+        <div class="kpi"><span class="k-label">On-hand now</span><span class="k-val">${onHand}</span><span class="k-sub">${esc(uom)}</span></div>
+        <div class="kpi k-good"><span class="k-label">Total received</span><span class="k-val">+${ins}</span></div>
+        <div class="kpi"><span class="k-label">Total issued</span><span class="k-val">−${outs}</span></div>
+        <div class="kpi ${adjs<0?'k-bad':adjs>0?'k-good':''}"><span class="k-label">Net adjustments</span><span class="k-val">${adjs>0?'+'+adjs:adjs}</span></div>
+        <div class="kpi"><span class="k-label">Movements</span><span class="k-val">${all.length}</span></div>`;
+
+      $('summary').textContent = `${prodName(state.product)} · ${all.length} movement(s) · ${onHand} ${uom} on-hand`;
+      $('p-title').textContent = `Stock Card — ${prodName(state.product)}`;
+      $('p-filters').textContent = `Lot: ${state.lot==='all'?'All':state.lot}  ·  Site: ${state.site==='all'?'All':dbName('sites',state.site)}  ·  ${state.since||'start'} → ${state.until||WMS_TODAY}`;
+    }
+    function fillLots(){
+      const lots = [...new Set(DB.lpns.filter(l=>l.product===state.product && l.lot).map(l=>l.lot))].sort();
+      $('f-lot').innerHTML = `<option value="all">All lots</option>` + lots.map(l=>`<option value="${esc(l)}"${l===state.lot?' selected':''}>${esc(l)}</option>`).join('');
+      if (!lots.includes(state.lot)) state.lot='all';
+      if (typeof $('f-lot')._ssSync==='function') $('f-lot')._ssSync();
+    }
+    function toggleFilter(b){ const f=$('filters'); const h=f.style.display==='none'; f.style.display=h?'':'none'; b.textContent=h?'Hide filter':'Show filter'; }
+
+    $('f-product').innerHTML = DB.products.map(p=>`<option value="${p.id}"${p.id===state.product?' selected':''}>${esc(prodName(p.id))}</option>`).join('');
+    $('f-site').innerHTML    = `<option value="all">All sites</option>` + DB.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    fillLots();
+    if (typeof $('f-product')._ssSync==='function') $('f-product')._ssSync();
+    $('f-product').addEventListener('change', e=>{ state.product=e.target.value; state.lot='all'; fillLots(); render(); });
+    $('f-lot').addEventListener('change',     e=>{ state.lot=e.target.value; render(); });
+    $('f-site').addEventListener('change',    e=>{ state.site=e.target.value; render(); });
+    $('f-dir').addEventListener('change',     e=>{ state.dir=e.target.value; render(); });
+    $('f-since').addEventListener('change',   e=>{ state.since=e.target.value; render(); });
+    $('f-until').addEventListener('change',   e=>{ state.until=e.target.value; render(); });
+    render();
+  </script>
+</body></html>
