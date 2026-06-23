@@ -183,8 +183,12 @@
             <span class="muted" style="font-size:11px">· ${binCount(z.code)} bin(s)</span>
             <a href="#" style="margin-left:auto;color:var(--bad)" onclick="removeArea(${i});return false">Remove</a>
           </div>
-          <label class="field" style="max-width:320px"><span>Owning client (segregation)</span>
-            <select onchange="setOwner(${i}, this.value)"><option value="">Shared — any client</option>${DB.clients.map(c=>`<option value="${c.id}" ${c.id===(z.owningClient||'')?'selected':''}>${c.name}</option>`).join('')}</select></label>
+          <div class="field" style="max-width:380px"><span>Owning client(s) (segregation)</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:6px 0 2px">
+              ${(z.owningClients||[]).map(cid=>`<span style="display:inline-flex;align-items:center;gap:4px;background:#e3f2fd;border:1px solid #90caf9;border-radius:12px;padding:2px 4px 2px 10px;font-size:12px;line-height:1.7">${dbName('clients',cid)}<a href="#" onclick="removeOwner(${i},'${cid}');return false" title="Remove" style="color:var(--bad);text-decoration:none;font-weight:bold;padding:0 5px">✕</a></span>`).join('')}
+              <select onchange="addOwner(${i}, this.value)" style="font-size:12px;max-width:170px"><option value="">+ Add client ▾</option>${DB.clients.filter(c=>!(z.owningClients||[]).includes(c.id)).map(c=>`<option value="${c.id}">${c.name}</option>`).join('')}</select>
+            </div>
+            <small class="muted">${(z.owningClients||[]).length ? 'Reserved for the client(s) above — other clients are blocked when segregation is ON.' : 'No clients = <b>shared</b> (any client).'}</small></div>
           <div class="muted" style="font-size:12px;margin-top:8px">Preferred categories</div>
           <div class="chip-grid">${DB.categories.map(c=>`<label><input type="checkbox" ${ (z.preferredCategories||[]).includes(c.id)?'checked':''} onchange="toggleCat(${i},'${c.id}',this.checked)"> ${c.name}</label>`).join('')}</div>
           <div class="muted" style="font-size:12px">Preferred sub-categories (optional)</div>
@@ -194,7 +198,7 @@
     function addArea(){
       const zs=curAreas(); const used=new Set(zs.map(z=>z.code));
       let code='Z'; for(let i=0;i<26;i++){ const c=String.fromCharCode(65+i); if(!used.has(c)){ code=c; break; } }
-      zs.push({ code, name:'Area '+code, preferredCategories:[], preferredSubCategories:[], owningClient:'' });
+      zs.push({ code, name:'Area '+code, preferredCategories:[], preferredSubCategories:[], owningClients:[] });
       renderAreas(curSiteId);
     }
     function removeArea(i){
@@ -204,7 +208,8 @@
       curAreas().splice(i,1); renderAreas(curSiteId);
     }
     function renameArea(i,v){ const z=curAreas()[i]; z.name=v.trim()||z.name; }
-    function setOwner(i,v){ curAreas()[i].owningClient=v; }
+    function addOwner(i, cid){ if(!cid) return; const z=curAreas()[i]; z.owningClients=z.owningClients||[]; if(!z.owningClients.includes(cid)) z.owningClients.push(cid); renderAreas(curSiteId); }
+    function removeOwner(i, cid){ const z=curAreas()[i]; z.owningClients=(z.owningClients||[]).filter(x=>x!==cid); renderAreas(curSiteId); }
     function toggleCat(i,id,on){ const z=curAreas()[i]; z.preferredCategories=z.preferredCategories||[]; if(on){ if(!z.preferredCategories.includes(id)) z.preferredCategories.push(id);} else { z.preferredCategories=z.preferredCategories.filter(x=>x!==id);} }
     function toggleSub(i,id,on){ const z=curAreas()[i]; z.preferredSubCategories=z.preferredSubCategories||[]; if(on){ if(!z.preferredSubCategories.includes(id)) z.preferredSubCategories.push(id);} else { z.preferredSubCategories=z.preferredSubCategories.filter(x=>x!==id);} }
 

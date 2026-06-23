@@ -13,7 +13,7 @@
 ## Entity-relationship overview
 ```
 Client ──< (operating) Site ──< Location ──>1 StorageArea (storage bins only; area scoped to site)
-  │                       └──< StorageArea (site.areas[])      StorageArea ──> owningClient? (Client)
+  │                       └──< StorageArea (site.areas[])      StorageArea ──>> owningClients[] (Client)
   │                                                            StorageArea ──> preferred Category/Sub
   ├──< Product (client-scoped) ──>1 Category ──< SubCategory
   │        ├──>0..1 preferred storage: per Site → Location | Area
@@ -100,7 +100,7 @@ Logical grouping for slotting + segregation, **decoupled from `levels`**.
 | name | string | ✓ | e.g. "Area A — Ambient" |
 | preferredCategories | string[] |  | `→ Category.id` — slotting affinity |
 | preferredSubCategories | string[] |  | `→ SubCategory.id` — finer affinity |
-| owningClient | string \| '' |  | `→ Client.id`; '' = unowned/shared. Used only when segregation is ON. |
+| owningClients | string[] |  | `→ Client.id`[]; **empty = unowned/shared**, else the **set** of clients allowed in the area (one or more). Used only when segregation is ON. |
 
 ## Location
 A physical spot. `DB.locations[]`. Identity = the permanent, scannable `id`.
@@ -441,7 +441,7 @@ Optional photo evidence attached to a document (header) or a line. One flat coll
 Every add/remove also writes a `logTxn()` row (`attach` / `attach-remove`). **[mock]** data-URL placeholders; production stores real uploads.
 
 ## Settings (system)
-`DB.settings` — `{ clientAreaSegregation: bool }` (greenfield default **false**). ON = a client is offered only its own + unowned Areas at putaway; OFF = Areas shared, `owningClient` informational. Client→site scoping is always on regardless. **⚠ This client REQUIRES segregation → the seed ships it `true`, with a dedicated Area per client (Areas D/E/F = Technip/SLB/Yinson, B = Globex; Area A + Soyo Area C shared). The build MUST deliver the toggle + per-area `owningClient` config and server-side enforcement (CC-02).**
+`DB.settings` — `{ clientAreaSegregation: bool }` (greenfield default **false**). ON = a client is offered only its own + unowned Areas at putaway; OFF = Areas shared, `owningClients` informational. Client→site scoping is always on regardless. **⚠ This client REQUIRES segregation → the seed ships it `true`, with a dedicated Area per client (Areas D/E/F = Technip/SLB/Yinson, B = Globex; Area A + Soyo Area C shared). An Area may be reserved for **one OR more** clients (`owningClients[]`). The build MUST deliver the toggle + per-area `owningClients` (multi-select) config and server-side enforcement (CC-02).**
 
 ---
 

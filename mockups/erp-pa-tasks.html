@@ -323,8 +323,8 @@
     }
     function segAllowed(bin, task){
       if (!segOn()) return true;
-      const zp = areaProfile(bin.site, areaOf(bin)); const owner = zp && zp.owningClient;
-      return !owner || owner === task.client;
+      const zp = areaProfile(bin.site, areaOf(bin)); const owners = (zp && zp.owningClients) || [];
+      return !owners.length || owners.includes(task.client);
     }
     function consolidatesHere(bin, task){
       const here = DB.lpns.filter(l=>l.loc===bin.id && l.status==='available' && l.product===task.product && l.client===task.client);
@@ -490,7 +490,7 @@
         if (!cap.ok || !seg || fz){
           const why = [];
           if (fz) why.push(`frozen — stock-take ${fz.id}`);
-          if (!seg){ const zp=areaProfile(b.site,areaOf(b)); why.push(`reserved for ${dbName('clients', zp.owningClient)}`); }
+          if (!seg){ const zp=areaProfile(b.site,areaOf(b)); why.push(`reserved for ${(zp.owningClients||[]).map(c=>dbName('clients',c)).join(', ')}`); }
           if (!cap.ok) why.push('full — ' + cap.fails.map(f=>`${f.dim} ${f.after}/${f.limit}`).join(', '));
           excluded.push({ b, why:why.join(' · ') });
           return;
@@ -754,7 +754,7 @@
       const fz = frozenTakeFor(l.id);
       if (fz) return { level:'error', msg:`${l.structured} is inside a frozen stock-take (${fz.id}) — putaway is refused until it is posted or abandoned.`, loc:l };
       if (l.type === 'storage'){
-        if (!segAllowed(l, cur)){ const zp=areaProfile(l.site,areaOf(l)); return { level:'error', msg:`${l.structured} is in an area reserved for ${dbName('clients',zp.owningClient)} — segregation is ON.`, loc:l }; }
+        if (!segAllowed(l, cur)){ const zp=areaProfile(l.site,areaOf(l)); return { level:'error', msg:`${l.structured} is in an area reserved for ${(zp.owningClients||[]).map(c=>dbName('clients',c)).join(', ')} — segregation is ON.`, loc:l }; }
         const cap = capacity(l, effTask());
         if (!cap.ok) return { level:'error', msg:`${l.structured} is over capacity for ${placeQty} unit(s): ${cap.fails.map(f=>`${f.dim} ${f.after}/${f.limit}`).join(', ')}. Reduce the quantity to split across bins.`, loc:l };
         return { level:'ok', msg:`Valid storage location — ${headroomTxt(l, effTask())}.`, loc:l };

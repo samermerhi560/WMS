@@ -39,19 +39,19 @@ const DB = {
   // `levels` = the per-site addressing path (human-readable code only).
   // `areas`  = managed logical areas for SLOTTING + SEGREGATION, decoupled from the path.
   //            Each storage location is assigned to one area code. An area carries its own
-  //            category affinity and (optional) owningClient. Renaming/restructuring `levels`
+  //            category affinity and (optional) owningClients[]. Renaming/restructuring `levels`
   //            never affects areas.
   sites: [
     { id: 'S-LYON',  name: 'Luanda',     city:'Luanda', country:'Angola', type:'Distribution Centre', status:'active',
       levels:['Floor','Zone','Aisle','Rack','Bin'],
       areas:[
-        { code:'A', name:'Area A — Ambient',    preferredCategories:['CAT-FB'],     preferredSubCategories:['SUB-OIL','SUB-DRY'], owningClient:'' },
-        { code:'B', name:'Area B — Cold chain', preferredCategories:['CAT-PHARMA'], preferredSubCategories:['SUB-VAX'],           owningClient:'C-GLBX' },
+        { code:'A', name:'Area A — Ambient',    preferredCategories:['CAT-FB'],     preferredSubCategories:['SUB-OIL','SUB-DRY'], owningClients:[] },
+        { code:'B', name:'Area B — Cold chain', preferredCategories:['CAT-PHARMA'], preferredSubCategories:['SUB-VAX'],           owningClients:['C-GLBX'] },
       ] },
     { id: 'S-PARIS', name: 'Soyo',       city:'Soyo',  country:'Angola', type:'Cross-dock Hub',       status:'active',
       levels:['Zone','Aisle'],
       areas:[
-        { code:'C', name:'Area C — Cross-dock', preferredCategories:[], preferredSubCategories:[], owningClient:'' },
+        { code:'C', name:'Area C — Cross-dock', preferredCategories:[], preferredSubCategories:[], owningClients:[] },
       ] },
   ],
   // Structure applied to a brand-new site; the user can edit it afterwards on the Site screen.
@@ -669,11 +669,13 @@ function binCapacityForAdd(binId, qty, product){
   if(bin.maxLpns    !=null && after.lpns  >bin.maxLpns)    fails.push({dim:'slots',after:after.lpns,  limit:bin.maxLpns});
   return { ok:fails.length===0, fails, after };
 }
-// Client–area segregation: when settings.clientAreaSegregation is ON, an owned Area accepts only its owner.
+// Client–area segregation: when settings.clientAreaSegregation is ON, an Area reserved for a SET of clients
+// (owningClients[]) admits only those clients; an empty/absent set = shared (any client).
 function binSegregationOk(binId, client){
   if(!(DB.settings && DB.settings.clientAreaSegregation)) return true;
-  const bin=DB.locations.find(x=>x.id===binId)||{}; const zp=areaInfo(bin.site, bin.area); const owner=zp&&zp.owningClient;
-  return !owner || owner===client;
+  const bin=DB.locations.find(x=>x.id===binId)||{}; const zp=areaInfo(bin.site, bin.area);
+  const owners=(zp&&zp.owningClients)||[];
+  return !owners.length || owners.includes(client);
 }
 
 /* ---- Physical-inventory FREEZE enforcement (shared; read by Putaway, Move, Transfer-ship + Allocation) ----
@@ -1486,9 +1488,9 @@ if (!DB.rtvs.length) DB.rtvs.push(
   //     (Existing Areas: A = shared, B = Globex-owned. Soyo Area C stays shared — a deliberate shared example.) ---
   const lyon = DB.sites.find(s=>s.id==='S-LYON');
   if (lyon && !lyon.areas.some(a=>a.code==='D')) lyon.areas.push(
-    { code:'D', name:'Area D — Technip (Oil & Gas)',      preferredCategories:['CAT-OG'], preferredSubCategories:['SUB-RIG','SUB-VALVE'],  owningClient:'C-TCHP' },
-    { code:'E', name:'Area E — Schlumberger (Oil & Gas)', preferredCategories:['CAT-OG'], preferredSubCategories:['SUB-DRILL','SUB-CHEM'], owningClient:'C-SLB' },
-    { code:'F', name:'Area F — Yinson (Oil & Gas)',       preferredCategories:['CAT-OG'], preferredSubCategories:['SUB-ROT','SUB-VALVE'],  owningClient:'C-YIN' }
+    { code:'D', name:'Area D — Technip (Oil & Gas)',      preferredCategories:['CAT-OG'], preferredSubCategories:['SUB-RIG','SUB-VALVE'],  owningClients:['C-TCHP'] },
+    { code:'E', name:'Area E — Schlumberger (Oil & Gas)', preferredCategories:['CAT-OG'], preferredSubCategories:['SUB-DRILL','SUB-CHEM'], owningClients:['C-SLB'] },
+    { code:'F', name:'Area F — Yinson (Oil & Gas)',       preferredCategories:['CAT-OG'], preferredSubCategories:['SUB-ROT','SUB-VALVE'],  owningClients:['C-YIN'] }
   );
 
   // --- Heavy-capacity storage bins, each assigned to its client's dedicated Area (D=Technip, E=SLB, F=Yinson). ---
